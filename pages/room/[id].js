@@ -278,20 +278,73 @@ export default function Room() {
     
     // 尝试获取对方IP信息
     fetchPeerIPInfo();
+    
+    // 安排多次尝试以确保获取到IP信息
+    const retryTimes = [1000, 2000, 5000, 10000];
+    retryTimes.forEach(delay => {
+      setTimeout(() => {
+        if (!peerIpInfo) {
+          fetchPeerIPInfo();
+        }
+      }, delay);
+    });
+    
+    // 设置轮询定时获取对方IP信息
+    const ipRefreshInterval = setInterval(() => {
+      fetchPeerIPInfo();
+    }, 15000); // 每15秒尝试一次
+    
+    setIpRefreshIntervalId(ipRefreshInterval);
   };
 
   // 获取对方IP信息
   const fetchPeerIPInfo = async () => {
+    if (!roomId) return;
+    
     try {
+      // 方法1: 通过房间查询所有对方IP信息
       const res = await fetch(`/api/signaling/ip?roomId=${roomId}&peerId=${peerId}`);
+      
       if (res.ok) {
         const data = await res.json();
-        if (data.ipInfo) {
+        if (data.ipInfoAvailable && data.ipInfo) {
           setPeerIpInfo(data.ipInfo);
+          return true;
         }
       }
+      
+      // 方法2: 如果我们知道对方ID，直接查询
+      if (remotePeerId) {
+        const directRes = await fetch(`/api/signaling/ip?roomId=${roomId}&remotePeerId=${remotePeerId}`);
+        
+        if (directRes.ok) {
+          const data = await directRes.json();
+          if (data.ipInfoAvailable && data.ipInfo) {
+            setPeerIpInfo(data.ipInfo);
+            return true;
+          }
+        }
+      }
+      
+      // 方法3: 从房间信息中获取对方信息
+      const roomRes = await fetch(`/api/signaling/room-info?roomId=${roomId}`);
+      
+      if (roomRes.ok) {
+        const roomData = await roomRes.json();
+        if (roomData.room && roomData.room.peers) {
+          // 找到不是自己的peer
+          const otherPeer = roomData.room.peers.find(p => p.id !== peerId);
+          if (otherPeer && otherPeer.ipInfo) {
+            setPeerIpInfo(otherPeer.ipInfo);
+            return true;
+          }
+        }
+      }
+      
+      return false;
     } catch (error) {
       console.error('Error fetching peer IP info:', error);
+      return false;
     }
   };
 
@@ -531,11 +584,24 @@ export default function Room() {
             </div>
             
             <div className="flex items-center space-x-2">
-              <div className={`px-3 py-1 rounded-full text-sm ${connected 
-                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
-                : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'}`}
-              >
-                {connected ? '已连接' : '等待连接...'}
+              <div className="flex items-center space-x-1">
+                <div className={`px-3 py-1 rounded-full text-sm ${connected 
+                  ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+                  : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'}`}
+                >
+                  {connected ? '已连接' : '等待连接...'}
+                </div>
+                
+                {connected && connectionLatency !== null && (
+                  <div className={`px-2 py-1 rounded-md text-xs font-mono ${
+                    connectionLatency < 0 ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200' :
+                    connectionLatency < 150 ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200' :
+                    connectionLatency < 300 ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200' :
+                    'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200'
+                  }`}>
+                    {connectionLatency < 0 ? '超时' : `${connectionLatency}ms`}
+                  </div>
+                )}
               </div>
               
               <button 
@@ -653,20 +719,25 @@ export default function Room() {
                 onSendMessage={handleSendMessage} 
                 messages={messages}
               />
-            </motion.div>
-            
-            {/* 日志 */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: 0.4 }}
-              className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md"
-            >
-              <h2 className="text-lg font-medium mb-2">连接日志</h2>
-              <LogConsole logs={logs} />
-            </motion.div>
-          </div>
-        </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}  );    </Layout>      </div>        </div>          </div>            </motion.div>              <LogConsole logs={logs} />              <h2 className="text-lg font-medium mb-2">连接日志</h2>            >              className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md"              transition={{ duration: 0.3, delay: 0.4 }}              animate={{ opacity: 1, y: 0 }}              initial={{ opacity: 0, y: 20 }}            <motion.div            {/* 日志 */}                        </motion.div>        </div>
       </div>
     </Layout>
   );

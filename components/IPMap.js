@@ -65,6 +65,33 @@ export default function IPMap({ ipInfo, peerIpInfo }) {
     console.log("对方IP信息:", peerIpInfo);
   }, [ipInfo, peerIpInfo]);
 
+  // 添加信息加载状态显示
+  const renderPeerInfoSection = () => {
+    if (!peerIpInfo) {
+      return (
+        <div className="flex-1 p-2 rounded-md bg-gray-50 dark:bg-gray-700/30 animate-pulse">
+          <h4 className="font-medium text-sm flex items-center">
+            <FiMapPin className="mr-1" /> 正在获取对方位置...
+          </h4>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            稍等片刻，从网络获取信息中
+          </p>
+        </div>
+      );
+    }
+    
+    return (
+      <div className="flex-1 p-2 rounded-md bg-green-50 dark:bg-green-900/30">
+        <h4 className="font-medium text-sm flex items-center">
+          <FiMapPin className="mr-1" /> 对方位置
+        </h4>
+        <p className="text-xs text-gray-600 dark:text-gray-300">
+          {peerIpInfo.ip} - {peerIpInfo.city || '未知城市'}, {peerIpInfo.region || '未知地区'}, {peerIpInfo.country_name || '未知国家'}
+        </p>
+      </div>
+    );
+  };
+
   if (!ipInfo) {
     return (
       <div className="rounded-lg bg-gray-100 dark:bg-gray-800 p-4 h-60 flex items-center justify-center">
@@ -113,25 +140,7 @@ export default function IPMap({ ipInfo, peerIpInfo }) {
             </p>
           </div>
           
-          {peerIpInfo ? (
-            <div className="flex-1 p-2 rounded-md bg-green-50 dark:bg-green-900/30">
-              <h4 className="font-medium text-sm flex items-center">
-                <FiMapPin className="mr-1" /> 对方位置
-              </h4>
-              <p className="text-xs text-gray-600 dark:text-gray-300">
-                {peerIpInfo.ip} - {peerIpInfo.city || '未知城市'}, {peerIpInfo.region || '未知地区'}, {peerIpInfo.country_name || '未知国家'}
-              </p>
-            </div>
-          ) : (
-            <div className="flex-1 p-2 rounded-md bg-gray-50 dark:bg-gray-700/30">
-              <h4 className="font-medium text-sm flex items-center opacity-50">
-                <FiMapPin className="mr-1" /> 等待对方连接
-              </h4>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                暂无对方位置信息
-              </p>
-            </div>
-          )}
+          {renderPeerInfoSection()}
         </div>
         
         {distance && (
