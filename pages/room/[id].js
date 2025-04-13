@@ -503,23 +503,46 @@ export default function Room() {
         break;
         
       case 'file-progress':
-        // 这里不添加日志，以避免日志过多
-        break;
-        
-      case 'file-complete':
-        addLog(`文件接收完成: ${data.fileName}`, 'success');
-        setReceivedFiles(prev => [
-          ...prev, 
-          {
-            id: data.fileId,
-            name: data.fileName,
-            size: data.fileSize,
-            type: data.fileType,
-            data: data.fileData
+        // 增强进度事件处理
+        if (data.progress > 0) {
+          // 分发自定义进度事件到全局
+          window.dispatchEvent(new CustomEvent('file-progress', { 
+            detail: {
+              fileId: data.fileId,
+              fileName: data.fileName,
+              progress: data.progress
+            }
+          }));
+          
+          // 每25%记录一次关键进度点
+          if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
+            addLog(`文件接收进度 ${data.fileName}: ${Math.floor(data.progress)}%`);
           }
-        ]);
+        }
         break;
-        
+      
+      case 'file-complete':
+        // 确保文件有效且包含数据
+        if (data.fileData && (data.fileData instanceof Blob) && data.fileData.size > 0) {
+          addLog(`文件接收完成: ${data.fileName} (${formatBytes(data.fileSize)})`, 'success');
+          
+          // 添加到收到的文件列表
+          setReceivedFiles(prev => [
+            ...prev, 
+            {
+              id: data.fileId || `file-${Date.now()}`,
+              name: data.fileName,
+              size: data.fileSize,
+              type: data.fileType,
+              data: data.fileData
+            }
+          ]);
+        } else {
+          addLog(`文件接收失败: ${data.fileName} - 无效的文件数据`, 'error');
+          console.error('文件数据无效:', data);
+        }
+        break;
+      
       default:
         console.log('Received data:', data);
     }

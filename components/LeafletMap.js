@@ -73,28 +73,34 @@ export default function LeafletMap({ center, zoom, ipInfo, peerIpInfo }) {
     
     const newMarkers = [];
     
-    // 添加自己的位置标记
+    // 添加自己的位置标记 - 添加空值检查
     if (ipInfo?.latitude && ipInfo?.longitude) {
       newMarkers.push({
         position: [parseFloat(ipInfo.latitude), parseFloat(ipInfo.longitude)],
         icon: createIcon('#3b82f6', L),
         popup: {
           title: '您的位置',
-          location: `${ipInfo.city}, ${ipInfo.country_name}`,
-          ip: ipInfo.ip
+          location: `${ipInfo.city || '未知城市'}, ${ipInfo.country_name || '未知国家'}`,
+          ip: ipInfo.ip || '未知IP',
+          isp: ipInfo.org || '未知ISP',
+          region: ipInfo.region || '未知地区',
+          timezone: ipInfo.timezone || '未知时区'
         }
       });
     }
     
-    // 添加对方的位置标记
+    // 添加对方的位置标记 - 添加空值检查
     if (peerIpInfo?.latitude && peerIpInfo?.longitude) {
       newMarkers.push({
         position: [parseFloat(peerIpInfo.latitude), parseFloat(peerIpInfo.longitude)],
         icon: createIcon('#10b981', L),
         popup: {
           title: '对方位置',
-          location: `${peerIpInfo.city}, ${peerIpInfo.country_name}`,
-          ip: peerIpInfo.ip
+          location: `${peerIpInfo.city || '未知城市'}, ${peerIpInfo.country_name || '未知国家'}`,
+          ip: peerIpInfo.ip || '未知IP',
+          isp: peerIpInfo.org || '未知ISP',
+          region: peerIpInfo.region || '未知地区',
+          timezone: peerIpInfo.timezone || '未知时区'
         }
       });
     }
@@ -124,11 +130,16 @@ export default function LeafletMap({ center, zoom, ipInfo, peerIpInfo }) {
           position={marker.position}
           icon={marker.icon}
         >
-          <Popup>
-            <div>
-              <div className="font-bold">{marker.popup.title}</div>
-              <div>{marker.popup.location}</div>
-              <div className="text-xs text-gray-500 mt-1">IP: {marker.popup.ip}</div>
+          <Popup className="custom-popup" minWidth={200}>
+            <div className="px-1 py-1">
+              <div className="font-bold text-base border-b pb-1 mb-2">{marker.popup.title}</div>
+              <div className="text-sm mb-1"><strong>位置:</strong> {marker.popup.location}</div>
+              <div className="text-sm mb-1"><strong>IP:</strong> {marker.popup.ip}</div>
+              <div className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                <div><strong>地区:</strong> {marker.popup.region}</div>
+                <div><strong>ISP:</strong> {marker.popup.isp}</div>
+                <div><strong>时区:</strong> {marker.popup.timezone}</div>
+              </div>
             </div>
           </Popup>
         </Marker>
