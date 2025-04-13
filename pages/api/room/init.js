@@ -1,4 +1,4 @@
-import { roomExists, setRoom } from '../../../lib/redis';
+import { roomExists, setRoom, getRoom } from '../../../lib/redis';
 import { isValidRoomId } from '../../../lib/utils';
 
 export default async function handler(req, res) {
@@ -18,6 +18,19 @@ export default async function handler(req, res) {
     
     // 确定当前用户是创建者还是加入者
     const isInitiator = !exists;
+    
+    // 如果房间已存在，检查人数
+    if (exists) {
+      const room = await getRoom(roomId);
+      
+      // 检查房间是否已满（超过2人）
+      if (room && room.peers && room.peers.length >= 2) {
+        return res.status(403).json({
+          message: '房间已满，无法加入',
+          roomFull: true
+        });
+      }
+    }
     
     // 如果房间不存在，创建它
     if (isInitiator) {

@@ -104,7 +104,7 @@ export default function Home() {
                       setError('');
                     }}
                     placeholder="例如：1234"
-                    className="w-full px-4 py-3 text-center text-2xl tracking-widest font-mono border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-4 py-3 text-center text-2xl tracking-widest font-mono border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                     required
                   />
                   {error && (
@@ -112,12 +112,10 @@ export default function Home() {
                   )}
                 </div>
                 
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+                <button
                   type="submit"
                   disabled={loading || !roomId}
-                  className="w-full btn btn-primary flex items-center justify-center py-3"
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? (
                     <span>检查中...</span>
@@ -127,7 +125,7 @@ export default function Home() {
                       <span>进入传输房间</span>
                     </>
                   )}
-                </motion.button>
+                </button>
               </form>
               
               <div className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">

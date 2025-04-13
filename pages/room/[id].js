@@ -5,6 +5,8 @@ import FileTransfer from '../../components/FileTransfer';
 import Chat from '../../components/Chat';
 import IPMap from '../../components/IPMap';
 import LogConsole from '../../components/LogConsole';
+import ConnectionStatus from '../../components/ConnectionStatus';
+import MediaChat from '../../components/MediaChat'; // 新增导入
 import { P2PConnection } from '../../lib/webrtc';
 import { motion } from 'framer-motion';
 import { FiUsers, FiRefreshCw, FiCopy, FiCheck, FiMonitor } from 'react-icons/fi';
@@ -27,6 +29,18 @@ export default function Room() {
   const [screenSharing, setScreenSharing] = useState(false);
   const [videoStream, setVideoStream] = useState(null);
   const [pollingId, setPollingId] = useState(null);
+  
+  // 连接状态跟踪
+  const [httpPollingActive, setHttpPollingActive] = useState(false);
+  const [p2pConnectionActive, setP2pConnectionActive] = useState(false);
+  const [dataChannelActive, setDataChannelActive] = useState(false);
+
+  // 添加状态来跟踪房间已满错误
+  const [roomFullError, setRoomFullError] = useState(false);
+
+  // 添加媒体流状态
+  const [localMediaStream, setLocalMediaStream] = useState(null);
+  const [remoteMediaStream, setRemoteMediaStream] = useState(null);
 
   // 添加日志
   const addLog = useCallback((message, level = 'info') => {
@@ -59,7 +73,13 @@ export default function Room() {
           // 初始化连接
           initConnection(data.isInitiator);
         } else {
-          addLog(`初始化房间失败: ${data.message}`, 'error');
+          // 检查是否是房间已满的错误
+          if (data.roomFull) {
+            addLog(`房间 ${roomId} 已满，无法加入`, 'error');
+            setRoomFullError(true);
+          } else {
+            addLog(`初始化房间失败: ${data.message}`, 'error');
+          }
         }
       } catch (error) {
         console.error('Room initialization error:', error);
@@ -102,6 +122,12 @@ export default function Room() {
       addLog(`初始化P2P连接...`);
       await p2pConnection.init();
       setConnection(p2pConnection);
+      
+      // 为媒体流注册回调
+      p2pConnection.onMediaStream((stream, type) => {
+        addLog(`收到对方${type || ''}媒体流`, 'info');
+        setRemoteMediaStream(stream);
+      });
       
       // 向服务器注册peerId
       await registerPeer(generatedPeerId, isInitiator);
@@ -148,24 +174,62 @@ export default function Room() {
   // 开始轮询检查远程Peer
   const startPolling = (peerId, p2pConnection) => {
     addLog(`开始轮询检查对方连接状态...`);
+    setHttpPollingActive(true);
+    
     const interval = setInterval(async () => {
+      // 如果已经连接，减少轮询频率
+      if (connected) {
+        clearInterval(interval);
+        // 使用更低频率的轮询保持IP信息更新
+        const slowInterval = setInterval(async () => {
+          try {
+            // 只获取IP信息，不尝试连接
+            const res = await fetch(`/api/signaling/poll?roomId=${roomId}&peerId=${peerId}`);
+            const data = await res.json();
+            
+            if (res.ok && data.ipInfo && data.ipInfo.ip !== (peerIpInfo?.ip || '')) {
+              setPeerIpInfo(data.ipInfo);
+            }
+          } catch (error) {
+            console.error('IP polling error:', error);
+          }
+        }, 10000); // 10秒一次
+        
+        setPollingId(slowInterval);
+        return slowInterval;
+      }
+      
       try {
         const res = await fetch(`/api/signaling/poll?roomId=${roomId}&peerId=${peerId}`);
         const data = await res.json();
         
-        if (res.ok && data.remotePeerId && data.remotePeerId !== remotePeerId) {
-          addLog(`发现对方 Peer ID: ${data.remotePeerId}`);
-          setRemotePeerId(data.remotePeerId);
-          
-          // 连接到远程Peer
-          if (p2pConnection && !connected) {
-            addLog(`尝试连接到对方...`);
-            p2pConnection.connect(data.remotePeerId);
+        if (res.ok && data.remotePeerId) {
+          // 严格检查：确保不是自己
+          if (data.remotePeerId === peerId) {
+            addLog(`检测到尝试连接到自己(${peerId})，已忽略此连接请求`, 'warn');
+            return;
           }
           
-          // 获取对方IP信息
-          if (data.ipInfo) {
-            setPeerIpInfo(data.ipInfo);
+          if (data.remotePeerId !== remotePeerId) {
+            addLog(`发现对方 Peer ID: ${data.remotePeerId}`);
+            setRemotePeerId(data.remotePeerId);
+            
+            // 连接到远程Peer
+            if (p2pConnection && !connected) {
+              addLog(`尝试连接到对方...`);
+              p2pConnection.connect(data.remotePeerId)
+                .then(() => {
+                  // 连接成功，不需要在handlePeerConnected中重复设置，因为那里已有逻辑
+                })
+                .catch(err => {
+                  addLog(`连接尝试失败: ${err.message}`, 'error');
+                });
+            }
+            
+            // 获取对方IP信息
+            if (data.ipInfo) {
+              setPeerIpInfo(data.ipInfo);
+            }
           }
         }
       } catch (error) {
@@ -209,6 +273,8 @@ export default function Room() {
   const handlePeerConnected = (conn) => {
     addLog(`已与对方建立连接!`, 'success');
     setConnected(true);
+    setP2pConnectionActive(true);
+    setDataChannelActive(true);
     
     // 尝试获取对方IP信息
     fetchPeerIPInfo();
@@ -284,6 +350,8 @@ export default function Room() {
     setRemotePeerId('');
     setPeerIpInfo(null);
     setVideoStream(null);
+    setP2pConnectionActive(false);
+    setDataChannelActive(false);
   };
 
   // 发送消息
@@ -353,6 +421,49 @@ export default function Room() {
     }
   };
 
+  // 处理媒体流改变
+  const handleMediaChange = (type, enabled, stream) => {
+    if (!connection || !connected) {
+      addLog(`无法${enabled ? '开启' : '关闭'}${type}: 未连接到对方`, 'error');
+      return;
+    }
+    
+    // 处理所有媒体关闭
+    if (type === 'all' && !enabled) {
+      if (localMediaStream) {
+        localMediaStream.getTracks().forEach(track => track.stop());
+      }
+      setLocalMediaStream(null);
+      
+      if (connection) {
+        connection.stopMediaStream('audio');
+        connection.stopMediaStream('video');
+      }
+      
+      return;
+    }
+    
+    // 处理单个媒体类型
+    if (enabled && stream) {
+      setLocalMediaStream(stream);
+      connection.sendMediaStream(stream, type);
+    } else {
+      if (localMediaStream) {
+        // 只停止特定类型的轨道
+        localMediaStream.getTracks()
+          .filter(track => type === 'audio' ? track.kind === 'audio' : track.kind === 'video')
+          .forEach(track => track.stop());
+      }
+      
+      // 如果关闭后没有其他活跃轨道，清除本地流
+      if (localMediaStream && localMediaStream.getTracks().length === 0) {
+        setLocalMediaStream(null);
+      }
+      
+      connection.stopMediaStream(type);
+    }
+  };
+
   // 复制房间链接
   const copyRoomLink = () => {
     const url = `${window.location.origin}/room/${roomId}`;
@@ -369,6 +480,29 @@ export default function Room() {
         <div className="flex items-center justify-center min-h-[50vh]">
           <div className="animate-pulse text-xl text-gray-600 dark:text-gray-300">
             加载中...
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  // 修改渲染逻辑，显示房间已满的错误
+  if (roomFullError) {
+    return (
+      <Layout>
+        <div className="max-w-md mx-auto mt-20 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+          <div className="text-center">
+            <div className="text-red-500 text-5xl mb-4">⚠️</div>
+            <h2 className="text-2xl font-bold mb-2">房间已满</h2>
+            <p className="text-gray-600 dark:text-gray-300 mb-6">
+              房间 #{roomId} 已经有两个用户，无法加入。请尝试其他房间号。
+            </p>
+            <button 
+              onClick={() => router.push('/')}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition duration-200"
+            >
+              返回首页
+            </button>
           </div>
         </div>
       </Layout>
@@ -406,19 +540,23 @@ export default function Room() {
               
               <button 
                 onClick={copyRoomLink} 
-                className="btn btn-sm btn-outline"
+                className="flex items-center space-x-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
               >
                 {copySuccess ? <FiCheck className="mr-1" /> : <FiCopy className="mr-1" />}
-                {copySuccess ? '已复制' : '复制链接'}
+                <span>{copySuccess ? '已复制' : '复制链接'}</span>
               </button>
               
               {connected && (
                 <button 
                   onClick={handleShareScreen} 
-                  className={`btn btn-sm ${screenSharing ? 'btn-error' : 'btn-info'}`}
+                  className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg transition-colors ${
+                    screenSharing 
+                      ? 'bg-red-500 hover:bg-red-600 text-white' 
+                      : 'bg-blue-500 hover:bg-blue-600 text-white'
+                  }`}
                 >
                   <FiMonitor className="mr-1" />
-                  {screenSharing ? '停止共享' : '共享屏幕'}
+                  <span>{screenSharing ? '停止共享' : '共享屏幕'}</span>
                 </button>
               )}
             </div>
@@ -463,6 +601,23 @@ export default function Room() {
               />
             </motion.div>
             
+            {/* 媒体聊天 */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.3 }}
+              className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md mb-6"
+            >
+              <MediaChat 
+                connection={connection}
+                connected={connected}
+                onMediaChange={handleMediaChange}
+                localStream={localMediaStream}
+                remoteStream={remoteMediaStream}
+                addLog={addLog}
+              />
+            </motion.div>
+            
             {/* IP地图 */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -475,8 +630,18 @@ export default function Room() {
             </motion.div>
           </div>
           
-          {/* 右侧 - 聊天和日志 */}
+          {/* 右侧 - 聊天、连接状态和日志 */}
           <div className="space-y-6">
+            {/* 连接状态 */}
+            <ConnectionStatus
+              httpPolling={httpPollingActive}
+              p2pConnection={p2pConnectionActive}
+              dataChannel={dataChannelActive}
+              isInitiator={isInitiator}
+              peerId={peerId}
+              remotePeerId={remotePeerId}
+            />
+            
             {/* 聊天 */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}

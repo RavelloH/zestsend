@@ -1,10 +1,16 @@
-import { ThemeProvider } from 'next-themes'
-import '../styles/globals.css'
+import { ThemeProvider } from 'next-themes';
+import { NextUIProvider } from '@nextui-org/react';
+import ThemeWrapper from '../components/ThemeWrapper';
+import '../styles/globals.css';
 
 export default function App({ Component, pageProps }) {
   return (
-    <ThemeProvider attribute="data-theme" defaultTheme="light">
-      <Component {...pageProps} />
-    </ThemeProvider>
-  )
+    <NextUIProvider>
+      <ThemeProvider attribute="class" defaultTheme="light">
+        <ThemeWrapper>
+          <Component {...pageProps} />
+        </ThemeWrapper>
+      </ThemeProvider>
+    </NextUIProvider>
+  );
 }

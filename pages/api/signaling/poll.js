@@ -24,11 +24,20 @@ export default async function handler(req, res) {
     let remotePeerType = null;
     
     if (room.peers && room.peers.length > 0) {
-      const otherPeers = room.peers.filter(p => p.id !== peerId);
+      // 严格筛选：必须不是自己的peerId
+      const otherPeers = room.peers.filter(p => p.id !== peerId && p.id !== undefined && p.id !== null);
+      
       if (otherPeers.length > 0) {
         // 只取第一个其他对等方，支持1对1通信
         remotePeerId = otherPeers[0].id;
         remotePeerType = otherPeers[0].type;
+        
+        // 确保返回的对等方ID不等于请求的ID
+        if (remotePeerId === peerId) {
+          console.warn(`警告: 检测到潜在的自连接风险，roomId=${roomId}, peerId=${peerId}`);
+          remotePeerId = null;
+          remotePeerType = null;
+        }
       }
     }
     
@@ -44,7 +53,8 @@ export default async function handler(req, res) {
       remotePeerId,
       remotePeerType,
       ipInfo,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      peerCount: room.peers ? room.peers.length : 0
     });
   } catch (error) {
     console.error('Polling error:', error);
