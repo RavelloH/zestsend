@@ -63,11 +63,12 @@ export default async function handler(req, res) {
     
     // 尝试获取远程Peer的IP信息，确保不是自己的IP
     let ipInfo = null;
-    let peerIPInfo = null;
+    let peerIPInfo = null; // 这个将存储远程对等方的IP信息
     
-    // 获取远程节点的IP信息
+    // 获取远程节点的IP信息 - 关键修复：只有当remotePeerId存在时才获取
     if (remotePeerId && selfPeer?.ip) {
       try {
+        // 修复点：使用remotePeerId而不是peerId获取远程对等方的IP信息
         ipInfo = await getIPInfo(roomId, remotePeerId);
         
         // 额外验证：确保返回的IP与自己的不同
@@ -80,15 +81,16 @@ export default async function handler(req, res) {
       }
     }
     
-    // 获取自己的IP信息，以便在对方获取自己的IP时使用
+    // 修复：为清晰起见，重命名变量，这里selIPInfo表示自己的IP信息
+    let selfIPInfo = null;
+    
+    // 获取自己的IP信息，将来可以被对方轮询到
     try {
       if (peerId) {
-        // console.log(`尝试获取本地IP信息，roomId=${roomId}, peerId=${peerId}`);
-        peerIPInfo = await getIPInfo(roomId, peerId);
-        // console.log(`获取到的本地IP信息: ${peerIPInfo ? JSON.stringify(peerIPInfo) : 'null'}`);
+        selfIPInfo = await getIPInfo(roomId, peerId);
       }
     } catch (error) {
-      // console.error(`获取本地IP信息出错: ${error.message}`);
+      console.error(`获取本地IP信息出错: ${error.message}`);
     }
     
     // 返回所有信息，即使某些字段为null
@@ -97,8 +99,8 @@ export default async function handler(req, res) {
       peerId,
       remotePeerId,
       remotePeerType,
-      ipInfo,
-      peerIPInfo,
+      ipInfo,                  // 远程对等方IP信息
+      selfIPInfo,              // 自己的IP信息 - 更清晰的命名
       timestamp: Date.now(),
       peerCount: room.peers ? room.peers.length : 0,
       shouldInitiateConnection,
