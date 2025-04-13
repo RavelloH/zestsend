@@ -6,7 +6,7 @@ import Chat from '../../components/Chat';
 import IPMap from '../../components/IPMap';
 import LogConsole from '../../components/LogConsole';
 import ConnectionStatus from '../../components/ConnectionStatus';
-import MediaChat from '../../components/MediaChat'; // 新增导入
+import MediaChat from '../../components/MediaChat'; 
 import { P2PConnection } from '../../lib/webrtc';
 import { motion } from 'framer-motion';
 import { FiUsers, FiRefreshCw, FiCopy, FiCheck, FiMonitor } from 'react-icons/fi';
@@ -30,7 +30,7 @@ export default function Room() {
   const [videoStream, setVideoStream] = useState(null);
   const [pollingId, setPollingId] = useState(null);
   
-  // 添加缺失的延迟状态变量
+  // 延迟状态变量
   const [httpLatency, setHttpLatency] = useState(null);
   const [p2pLatency, setP2pLatency] = useState(null);
   
@@ -39,22 +39,22 @@ export default function Room() {
   const [p2pConnectionActive, setP2pConnectionActive] = useState(false);
   const [dataChannelActive, setDataChannelActive] = useState(false);
 
-  // 添加状态来跟踪房间已满错误
+  // 房间已满错误
   const [roomFullError, setRoomFullError] = useState(false);
 
-  // 添加媒体流状态
+  // 媒体流状态
   const [localMediaStream, setLocalMediaStream] = useState(null);
   const [remoteMediaStream, setRemoteMediaStream] = useState(null);
 
-  // 添加初始化状态标志
+  // 初始化状态标志
   const [initialized, setInitialized] = useState(false);
   const [peerRegistered, setPeerRegistered] = useState(false);
   
-  // 使用useRef来跟踪初始化状态，这比useState更可靠防止重复初始化
+  // 使用useRef防止重复初始化
   const initRef = useRef(false);
   const registrationRef = useRef(false);
   
-  // 添加ref来保存connection对象的引用
+  // 保存connection对象的引用
   const connectionRef = useRef(null);
 
   // 添加日志
@@ -67,6 +67,13 @@ export default function Room() {
     setLogs(logs => [...logs, log]);
     console.log(`[${level.toUpperCase()}] ${message}`);
   }, []);
+
+  // 确保在peerId更新后重新获取IP信息
+  useEffect(() => {
+    if (peerId && roomId) {
+      fetchIPInfo();
+    }
+  }, [peerId, roomId]);
 
   // 初始化房间逻辑
   useEffect(() => {
@@ -85,9 +92,6 @@ export default function Room() {
         if (res.ok) {
           setIsInitiator(data.isInitiator);
           addLog(`您是${data.isInitiator ? '创建者' : '加入者'}`);
-          
-          // 获取IP信息
-          fetchIPInfo();
           
           // 初始化连接
           initConnection(data.isInitiator);
@@ -130,6 +134,11 @@ export default function Room() {
       const generatedPeerId = `zestsend-${roomId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       setPeerId(generatedPeerId);
       
+      // 设置peerId后立即获取IP信息(异步)
+      setTimeout(() => {
+        fetchIPInfo(); // 异步获取IP信息，不阻塞连接初始化
+      }, 100);
+      
       addLog(`正在创建P2P连接对象...`);
       const p2pConnection = new P2PConnection(
         roomId,
@@ -159,8 +168,7 @@ export default function Room() {
         setPeerRegistered(true);
       }
       
-      // 启动轮询 - 无论是发送方还是接收方都需要轮询检查对方状态
-      // 移除仅限接收方的条件，让所有用户都启动轮询
+      // 启动轮询 - 让所有用户都启动轮询
       startPolling(generatedPeerId, p2pConnection, isInitiator);
     } catch (error) {
       console.error('Connection initialization error:', error);
@@ -205,6 +213,34 @@ export default function Room() {
     }
   };
 
+  // 获取IP信息
+  const fetchIPInfo = async () => {
+    try {
+      // 确保有peerId和roomId时才请求
+      if (!peerId || !roomId) {
+        console.log('延迟获取IP信息: 等待peerId和roomId');
+        return; 
+      }
+
+      // 附带roomId和peerId参数请求IP信息，使服务器直接存储到Redis
+      const res = await fetch(`/api/ip?roomId=${roomId}&peerId=${peerId}`);
+      
+      if (res.ok) {
+        const ipData = await res.json();
+        console.log('获取到IP信息:', ipData);
+        setIpInfo(ipData);
+        
+        // 已在服务器直接存储到Redis，不需要额外的存储请求
+        addLog(`获取到IP信息: ${ipData.city}, ${ipData.country_name}`, 'info');
+      } else {
+        throw new Error('获取IP信息失败，服务器返回错误');
+      }
+    } catch (error) {
+      console.error('Error fetching IP info:', error);
+      addLog(`获取IP信息失败: ${error.message}`, 'warn');
+    }
+  };
+
   // 开始轮询检查远程Peer
   const startPolling = (peerId, p2pConnection, isInitiator) => {
     // 防止重复启动轮询
@@ -216,14 +252,15 @@ export default function Room() {
     addLog(`开始轮询检查对方连接状态...`);
     setHttpPollingActive(true);
     
-    // 添加一个引用变量跟踪内部连接状态，确保轮询内部立即感知连接状态变化
+    // 跟踪内部连接状态，确保轮询内部立即感知连接状态变化
     const connectionState = { isConnected: connected };
     
-    // 添加一个变量来防止日志重复
+    // 防止日志重复的变量
     const logState = {
       lastRemotePeerId: null,
       lastConnectionAttempt: 0,
-      connectionCheckLogShown: false
+      connectionCheckLogShown: false,
+      lastErrorTime: 0
     };
     
     const interval = setInterval(async () => {
@@ -243,15 +280,21 @@ export default function Room() {
             const data = await res.json();
             
             if (res.ok) {
-              // 检查是否有更新的IP信息
-              if (data.ipInfo && JSON.stringify(data.ipInfo) !== JSON.stringify(peerIpInfo)) {
-                setPeerIpInfo(data.ipInfo);
-                console.log("低频轮询模式：更新对方IP信息:", data.ipInfo);
+              // 轮询获取对方最新的IP信息
+              if (data.remotePeerId && data.remotePeerId !== remotePeerId) {
+                setRemotePeerId(data.remotePeerId);
               }
-              // 如果没有ipInfo但有peerIPInfo，使用对方的自己信息作为自己的对方信息
-              else if (data.peerIPInfo && JSON.stringify(data.peerIPInfo) !== JSON.stringify(peerIpInfo)) {
+              
+              // 更新对方IP信息
+              if (data.ipInfo) {
+                console.log('轮询获取到对方IP信息:', data.ipInfo);
+                setPeerIpInfo(data.ipInfo);
+              } else if (data.peerIPInfo) {
+                console.log('轮询获取到对方从我们这获取的IP信息:', data.peerIPInfo);
                 setPeerIpInfo(data.peerIPInfo);
-                console.log("低频轮询模式：使用远程自身IP信息:", data.peerIPInfo);
+              } else {
+                // 如果没有拿到对方的IP信息，尝试主动获取
+                fetchPeerIPInfo();
               }
             }
           } catch (error) {
@@ -307,7 +350,7 @@ export default function Room() {
               logState.lastRemotePeerId = data.remotePeerId;
             }
             
-            // 关键修改：严格检查连接状态，禁止在已连接状态下尝试连接
+            // 严格检查连接状态，禁止在已连接状态下尝试连接
             if (p2pConnection && !connectionState.isConnected && !connected) {
               // 检查p2p连接对象的连接状态
               const isAlreadyConnected = p2pConnection.isConnected && p2pConnection.isConnected();
@@ -375,44 +418,31 @@ export default function Room() {
     return interval;
   };
 
-  // 获取IP信息
-  const fetchIPInfo = async () => {
+  // 获取对方IP信息 - 改进版，直接从Redis获取
+  const fetchPeerIPInfo = async () => {
+    if (!remotePeerId || !roomId) {
+      console.log('无法获取对方IP信息：缺少remotePeerId或roomId');
+      return;
+    }
+    
     try {
-      const res = await fetch('/api/ip');
+      console.log(`主动获取对方IP信息: roomId=${roomId}, remotePeerId=${remotePeerId}`);
+      const res = await fetch(`/api/signaling/ip?roomId=${roomId}&peerId=${remotePeerId}`);
+      
       if (res.ok) {
-        const ipData = await res.json();
-        setIpInfo(ipData);
-        
-        // 避免在未获取到peerId时尝试存储IP信息
-        if (peerId) {
-          // 将IP信息存储到服务器
-          try {
-            console.log(`存储IP信息: roomId=${roomId}, peerId=${peerId}`, ipData);
-            const storeRes = await fetch('/api/signaling/ip', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                roomId,
-                peerId,
-                ipInfo: ipData
-              }),
-            });
-            
-            if (!storeRes.ok) {
-              console.error('存储IP信息失败:', await storeRes.text());
-            }
-          } catch (error) {
-            console.error('存储IP信息请求失败:', error);
-          }
+        const data = await res.json();
+        if (data.ipInfo) {
+          console.log('获取到对方IP信息:', data.ipInfo);
+          setPeerIpInfo(data.ipInfo);
+          addLog(`已获取对方位置信息: ${data.ipInfo.city}, ${data.ipInfo.country_name}`, 'info');
         } else {
-          console.log('未存储IP信息: peerId为空');
+          console.log('获取对方IP信息失败：Redis中无数据');
         }
+      } else {
+        console.error('获取对方IP信息请求失败');
       }
     } catch (error) {
-      console.error('Error fetching IP info:', error);
-      addLog(`获取IP信息失败: ${error.message}`, 'warn');
+      console.error('Error fetching peer IP info:', error);
     }
   };
 
@@ -444,21 +474,6 @@ export default function Room() {
       }, 1000);
     } else {
       addLog('无法开始延迟测量：连接对象不可用', 'warn');
-    }
-  };
-
-  // 获取对方IP信息
-  const fetchPeerIPInfo = async () => {
-    try {
-      const res = await fetch(`/api/signaling/ip?roomId=${roomId}&peerId=${peerId}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.ipInfo) {
-          setPeerIpInfo(data.ipInfo);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching peer IP info:', error);
     }
   };
 
@@ -526,7 +541,7 @@ export default function Room() {
       connectionRef.current.stopLatencyMeasurement();
     }
     
-    // 添加：当连接断开时，重新启动轮询以尝试重新连接
+    // 当连接断开时，重新启动轮询以尝试重新连接
     // 确保只有在已经停止轮询时才重新启动
     if (!httpPollingActive && !pollingId && peerId) {
       addLog(`连接断开，重新开始轮询...`, 'info');
@@ -720,7 +735,7 @@ export default function Room() {
                 onClick={copyRoomLink} 
                 className="flex items-center space-x-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
               >
-                {copySuccess ? <FiCheck className="mr-1" /> : <FiCopy className="mr-1" />} 
+                {copySuccess ? <FiCheck className="mr-1" /> : <FiCopy className="mr-1" />}
                 <span>{copySuccess ? '已复制' : '复制链接'}</span>
               </button>
               

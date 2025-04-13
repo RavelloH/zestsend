@@ -1,7 +1,12 @@
+import { storeIPInfo, getIPInfo } from '../../lib/redis';
+
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
     return res.status(405).json({ message: '只允许GET请求' });
   }
+
+  // 获取roomId和peerId参数
+  const { roomId, peerId } = req.query;
 
   try {
     // 获取客户端IP
@@ -25,8 +30,8 @@ export default async function handler(req, res) {
           longitude = parseFloat(lon);
         }
         
-        // 返回IP信息
-        return res.status(200).json({
+        // 构建IP信息对象
+        const ipInfo = {
           ip: ipData.ip || ip,
           city: ipData.city || 'Unknown',
           region: ipData.region || 'Unknown',
@@ -36,7 +41,30 @@ export default async function handler(req, res) {
           longitude: longitude,
           timezone: ipData.timezone || 'Unknown',
           org: ipData.org || 'Unknown'
-        });
+        };
+        
+        // 如果提供了roomId和peerId，直接将IP信息存储到Redis
+        if (roomId && peerId) {
+          console.log(`接收到IP请求与存储：roomId=${roomId}, peerId=${peerId}`, ipInfo);
+          
+          try {
+            await storeIPInfo(roomId, peerId, ipInfo);
+            console.log(`已存储IP信息到Redis: roomId=${roomId}, peerId=${peerId}`);
+            
+            // 验证存储是否成功
+            const stored = await getIPInfo(roomId, peerId);
+            if (!stored) {
+              console.warn(`存储IP信息失败验证：roomId=${roomId}, peerId=${peerId}`);
+            }
+          } catch (storeError) {
+            console.error(`存储IP信息到Redis失败: ${storeError.message}`);
+          }
+        } else {
+          console.log('未提供roomId或peerId，IP信息未存储到Redis');
+        }
+        
+        // 返回IP信息
+        return res.status(200).json(ipInfo);
       } else {
         throw new Error('Failed to fetch IP info');
       }
@@ -44,7 +72,7 @@ export default async function handler(req, res) {
       console.error('Error fetching IP info, using fallback data:', error);
       
       // 使用虚拟数据作为回退
-      return res.status(200).json({
+      const fallbackIpInfo = {
         ip: ip,
         city: 'Beijing',
         region: 'Beijing',
@@ -55,7 +83,19 @@ export default async function handler(req, res) {
         timezone: 'Asia/Shanghai',
         org: 'Local Network',
         _fallback: true
-      });
+      };
+      
+      // 如果提供了roomId和peerId，将回退数据也存储到Redis
+      if (roomId && peerId) {
+        try {
+          await storeIPInfo(roomId, peerId, fallbackIpInfo);
+          console.log(`已存储回退IP信息到Redis: roomId=${roomId}, peerId=${peerId}`);
+        } catch (storeError) {
+          console.error(`存储回退IP信息到Redis失败: ${storeError.message}`);
+        }
+      }
+      
+      return res.status(200).json(fallbackIpInfo);
     }
   } catch (error) {
     console.error('Error in IP handler:', error);
