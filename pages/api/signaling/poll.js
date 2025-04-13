@@ -57,8 +57,15 @@ export default async function handler(req, res) {
     
     // 尝试获取远程Peer的IP信息
     let ipInfo = null;
+    let peerIPInfo = null; // 添加对方的IP信息
+    
     if (remotePeerId) {
       ipInfo = await getIPInfo(roomId, remotePeerId);
+      
+      // 添加: 获取对方的IP信息
+      if (selfPeer && selfPeer.id) {
+        peerIPInfo = await getIPInfo(roomId, selfPeer.id);
+      }
     }
     
     return res.status(200).json({
@@ -67,6 +74,7 @@ export default async function handler(req, res) {
       remotePeerId,
       remotePeerType,
       ipInfo,
+      peerIPInfo, // 添加对方的IP信息
       timestamp: Date.now(),
       peerCount: room.peers ? room.peers.length : 0,
       shouldInitiateConnection, // 双方都可以主动连接

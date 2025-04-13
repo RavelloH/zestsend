@@ -266,94 +266,101 @@ export default function Room() {
         const latency = pollEndTime - pollStartTime;
         setHttpLatency(latency);
         
-        if (res.ok && data.remotePeerId) {
-          // 严格检查：确保不是自己
-          if (data.remotePeerId === peerId) {
-            // 只在第一次出现自连接时显示警告，避免重复日志
-            if (!logState.selfConnectionWarningShown) {
-              addLog(`检测到尝试连接到自己(${peerId})，已忽略此连接请求`, 'warn');
-              logState.selfConnectionWarningShown = true;
-            }
-            return;
+        if (res.ok) {
+          // 即使已连接，仍然更新remotePeerId，确保两端都能看到对方ID
+          if (data.remotePeerId && data.remotePeerId !== remotePeerId) {
+            setRemotePeerId(data.remotePeerId);
           }
           
-          // 每次处理前再次检查连接状态
-          if (connectionState.isConnected) {
-            // 如果已连接，只更新远程ID和IP信息，不尝试重新连接
-            // 同时不产生任何日志
-            if (data.remotePeerId !== remotePeerId) {
-              setRemotePeerId(data.remotePeerId);
-            }
-            
+          // 获取对方IP信息（使用ipInfo或peerIPInfo字段）
+          if (data.ipInfo || data.peerIPInfo) {
             if (data.ipInfo) {
               setPeerIpInfo(data.ipInfo);
+            } else if (data.peerIPInfo) {
+              // 使用对方返回的自己的IP信息作为对方的IP信息
+              setPeerIpInfo(data.peerIPInfo);
             }
-            return;
           }
           
-          // 检查是否是新的远程对等方ID - 只有在变化时才输出日志
-          const isNewRemotePeer = data.remotePeerId !== logState.lastRemotePeerId;
-          if (isNewRemotePeer) {
-            addLog(`发现对方 Peer ID: ${data.remotePeerId}`);
-            setRemotePeerId(data.remotePeerId);
-            logState.lastRemotePeerId = data.remotePeerId;
-          }
-          
-          // 关键修改：严格检查连接状态，禁止在已连接状态下尝试连接
-          if (p2pConnection && !connectionState.isConnected && !connected) {
-            // 检查p2p连接对象的连接状态
-            const isAlreadyConnected = p2pConnection.isConnected && p2pConnection.isConnected();
-            
-            if (isAlreadyConnected) {
-              // 只在首次检测到活跃连接时输出日志，避免重复日志
-              if (!logState.connectionCheckLogShown) {
-                addLog(`检测到已有活跃连接，跳过连接尝试`, 'info');
-                logState.connectionCheckLogShown = true;
+          if (data.remotePeerId) {
+            // 每次处理前再次检查连接状态
+            if (connectionState.isConnected) {
+              // 如果已连接，只更新远程ID和IP信息，不尝试重新连接
+              // 同时不产生任何日志
+              if (data.remotePeerId !== remotePeerId) {
+                setRemotePeerId(data.remotePeerId);
+              }
+              
+              if (data.ipInfo) {
+                setPeerIpInfo(data.ipInfo);
               }
               return;
             }
             
-            // 限制连接尝试的频率
-            const now = Date.now();
-            const timeSinceLastAttempt = now - logState.lastConnectionAttempt;
-            const minAttemptInterval = 5000; // 5秒内不重复尝试连接
-            
-            if (timeSinceLastAttempt < minAttemptInterval) {
-              return; // 静默跳过，不记录日志
+            // 检查是否是新的远程对等方ID - 只有在变化时才输出日志
+            const isNewRemotePeer = data.remotePeerId !== logState.lastRemotePeerId;
+            if (isNewRemotePeer) {
+              addLog(`发现对方 Peer ID: ${data.remotePeerId}`);
+              setRemotePeerId(data.remotePeerId);
+              logState.lastRemotePeerId = data.remotePeerId;
             }
             
-            const delayTime = data.connectionPriority === 'high' ? 0 : 1000;
-            
-            setTimeout(() => {
-              // 再次检查连接状态，以防在延迟期间已连接
-              if (!connected && !connectionState.isConnected) {
-                if (p2pConnection.isConnected && p2pConnection.isConnected()) {
-                  return; // 已连接，静默返回
+            // 关键修改：严格检查连接状态，禁止在已连接状态下尝试连接
+            if (p2pConnection && !connectionState.isConnected && !connected) {
+              // 检查p2p连接对象的连接状态
+              const isAlreadyConnected = p2pConnection.isConnected && p2pConnection.isConnected();
+              
+              if (isAlreadyConnected) {
+                // 只在首次检测到活跃连接时输出日志，避免重复日志
+                if (!logState.connectionCheckLogShown) {
+                  addLog(`检测到已有活跃连接，跳过连接尝试`, 'info');
+                  logState.connectionCheckLogShown = true;
                 }
-                
-                addLog(`尝试连接到对方...`);
-                logState.lastConnectionAttempt = Date.now();
-                
-                p2pConnection.connect(data.remotePeerId)
-                  .then(() => {
-                    // 成功后立即更新内部引用状态，防止其他轮询尝试重复连接
-                    connectionState.isConnected = true;
-                    logState.connectionCheckLogShown = false; // 重置标志，允许下一次连接时显示日志
-                  })
-                  .catch(err => {
-                    // 如果是"已存在连接"错误，可以忽略
-                    if (!err.message.includes('already connected') && 
-                        !err.message.includes('Connection already exists')) {
-                      addLog(`连接尝试失败: ${err.message}`, 'error');
-                    }
-                  });
+                return;
               }
-            }, delayTime);
-          }
-          
-          // 获取对方IP信息
-          if (data.ipInfo) {
-            setPeerIpInfo(data.ipInfo);
+              
+              // 限制连接尝试的频率
+              const now = Date.now();
+              const timeSinceLastAttempt = now - logState.lastConnectionAttempt;
+              const minAttemptInterval = 5000; // 5秒内不重复尝试连接
+              
+              if (timeSinceLastAttempt < minAttemptInterval) {
+                return; // 静默跳过，不记录日志
+              }
+              
+              const delayTime = data.connectionPriority === 'high' ? 0 : 1000;
+              
+              setTimeout(() => {
+                // 再次检查连接状态，以防在延迟期间已连接
+                if (!connected && !connectionState.isConnected) {
+                  if (p2pConnection.isConnected && p2pConnection.isConnected()) {
+                    return; // 已连接，静默返回
+                  }
+                  
+                  addLog(`尝试连接到对方...`);
+                  logState.lastConnectionAttempt = Date.now();
+                  
+                  p2pConnection.connect(data.remotePeerId)
+                    .then(() => {
+                      // 成功后立即更新内部引用状态，防止其他轮询尝试重复连接
+                      connectionState.isConnected = true;
+                      logState.connectionCheckLogShown = false; // 重置标志，允许下一次连接时显示日志
+                    })
+                    .catch(err => {
+                      // 如果是"已存在连接"错误，可以忽略
+                      if (!err.message.includes('already connected') && 
+                          !err.message.includes('Connection already exists')) {
+                        addLog(`连接尝试失败: ${err.message}`, 'error');
+                      }
+                    });
+                }
+              }, delayTime);
+            }
+            
+            // 获取对方IP信息
+            if (data.ipInfo) {
+              setPeerIpInfo(data.ipInfo);
+            }
           }
         }
       } catch (error) {
