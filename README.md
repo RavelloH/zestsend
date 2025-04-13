@@ -2,6 +2,9 @@
 
 ZestSend 是一个基于 WebRTC 的点对点(P2P)文件传输网站，支持安全、私密地传输文件和消息，无需通过服务器中转或存储。
 
+![site show](https://github.com/user-attachments/assets/cf244397-1087-44a3-bfe1-0e05f397c9ca)
+
+
 ## 功能特点
 
 - 🔒 点对点(P2P)加密传输，保证数据安全与隐私
