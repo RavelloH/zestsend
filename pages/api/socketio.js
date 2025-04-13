@@ -1,4 +1,6 @@
 import { Server } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import Redis from 'ioredis';
 
 // 房间状态管理 - 简化数据结构
 const rooms = {}; // 格式: { roomId: { users: Map<sessionId, socketId>, initiator: sessionId } }
@@ -18,6 +20,21 @@ const debugLog = (message, data = null) => {
 export default function SocketHandler(req, res) {
   if (!res.socket.server.io) {
     debugLog('初始化Socket.io服务器');
+    
+    // 创建Redis客户端
+    let pubClient;
+    let subClient;
+    
+    if (process.env.REDIS_URL) {
+      try {
+        debugLog('连接到Redis适配器');
+        pubClient = new Redis(process.env.REDIS_URL);
+        subClient = pubClient.duplicate();
+      } catch (error) {
+        debugLog('Redis连接失败', { error: error.message });
+      }
+    }
+
     const io = new Server(res.socket.server, {
       path: '/api/socketio',
       addTrailingSlash: false,
@@ -40,6 +57,12 @@ export default function SocketHandler(req, res) {
         pollingDuration: 60000,    // 增加到60秒
       }
     });
+
+    // 如果Redis客户端已连接，设置适配器
+    if (pubClient && subClient) {
+      io.adapter(createAdapter(pubClient, subClient));
+      debugLog('Redis适配器已设置');
+    }
 
     // 设置定期清理房间的定时器
     setInterval(() => {
