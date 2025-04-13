@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/router';
 import Layout from '../../components/Layout';
 import FileTransfer from '../../components/FileTransfer';
@@ -42,6 +42,14 @@ export default function Room() {
   const [localMediaStream, setLocalMediaStream] = useState(null);
   const [remoteMediaStream, setRemoteMediaStream] = useState(null);
 
+  // 添加初始化状态标志
+  const [initialized, setInitialized] = useState(false);
+  const [peerRegistered, setPeerRegistered] = useState(false);
+  
+  // 使用useRef来跟踪初始化状态，这比useState更可靠防止重复初始化
+  const initRef = useRef(false);
+  const registrationRef = useRef(false);
+
   // 添加日志
   const addLog = useCallback((message, level = 'info') => {
     const log = {
@@ -55,7 +63,11 @@ export default function Room() {
 
   // 初始化房间逻辑
   useEffect(() => {
-    if (!roomId) return;
+    // 使用ref防止重复初始化，即使在严格模式下
+    if (!roomId || initRef.current) return;
+    
+    // 立即标记为已初始化，防止重复执行
+    initRef.current = true;
 
     const initRoom = async () => {
       try {
@@ -72,6 +84,9 @@ export default function Room() {
           
           // 初始化连接
           initConnection(data.isInitiator);
+          
+          // 标记为已初始化
+          setInitialized(true);
         } else {
           // 检查是否是房间已满的错误
           if (data.roomFull) {
@@ -99,7 +114,7 @@ export default function Room() {
         clearInterval(pollingId);
       }
     };
-  }, [roomId]);
+  }, [roomId]); // 仅依赖roomId，通过ref控制重复执行
 
   // 初始化WebRTC连接
   const initConnection = async (isInitiator) => {
@@ -129,13 +144,16 @@ export default function Room() {
         setRemoteMediaStream(stream);
       });
       
-      // 向服务器注册peerId
-      await registerPeer(generatedPeerId, isInitiator);
-      
-      // 如果不是创建者，尝试连接到已存在的peer
-      if (!isInitiator) {
-        startPolling(generatedPeerId, p2pConnection);
+      // 向服务器注册peerId，只在未注册时进行
+      if (!registrationRef.current) {
+        await registerPeer(generatedPeerId, isInitiator);
+        registrationRef.current = true;
+        setPeerRegistered(true);
       }
+      
+      // 启动轮询 - 无论是发送方还是接收方都需要轮询检查对方状态
+      // 移除仅限接收方的条件，让所有用户都启动轮询
+      startPolling(generatedPeerId, p2pConnection, isInitiator);
     } catch (error) {
       console.error('Connection initialization error:', error);
       addLog(`初始化连接出错: ${error.message}`, 'error');
@@ -144,6 +162,12 @@ export default function Room() {
 
   // 向服务器注册peerId
   const registerPeer = async (peerId, isInitiator) => {
+    // 防止重复注册
+    if (registrationRef.current) {
+      addLog(`Peer ID 已经注册，跳过注册过程`, 'info');
+      return true;
+    }
+    
     try {
       addLog(`正在向服务器注册Peer ID...`);
       const res = await fetch('/api/signaling/register', {
@@ -164,6 +188,8 @@ export default function Room() {
       }
       
       addLog(`Peer ID注册成功`, 'success');
+      registrationRef.current = true;
+      setPeerRegistered(true);
       return true;
     } catch (error) {
       addLog(`注册Peer ID失败: ${error.message}`, 'error');
@@ -172,7 +198,13 @@ export default function Room() {
   };
 
   // 开始轮询检查远程Peer
-  const startPolling = (peerId, p2pConnection) => {
+  const startPolling = (peerId, p2pConnection, isInitiator) => {
+    // 防止重复启动轮询
+    if (httpPollingActive || pollingId) {
+      addLog(`轮询已经在运行中，跳过`, 'info');
+      return pollingId;
+    }
+    
     addLog(`开始轮询检查对方连接状态...`);
     setHttpPollingActive(true);
     
@@ -214,16 +246,28 @@ export default function Room() {
             addLog(`发现对方 Peer ID: ${data.remotePeerId}`);
             setRemotePeerId(data.remotePeerId);
             
-            // 连接到远程Peer
+            // 修改连接逻辑：不再等待对方连接，双方都尝试主动连接
+            // 会自动处理可能的连接冲突
             if (p2pConnection && !connected) {
-              addLog(`尝试连接到对方...`);
-              p2pConnection.connect(data.remotePeerId)
-                .then(() => {
-                  // 连接成功，不需要在handlePeerConnected中重复设置，因为那里已有逻辑
-                })
-                .catch(err => {
-                  addLog(`连接尝试失败: ${err.message}`, 'error');
-                });
+              // 短暂延迟以避免完全同时连接
+              const delayTime = data.connectionPriority === 'high' ? 0 : 1000;
+              
+              setTimeout(() => {
+                if (!connected) { // 再次检查以避免在延迟期间已连接
+                  addLog(`尝试连接到对方...`);
+                  p2pConnection.connect(data.remotePeerId)
+                    .then(() => {
+                      // 连接成功，不需要额外处理
+                    })
+                    .catch(err => {
+                      // 如果是"已存在连接"错误，可以忽略
+                      if (!err.message.includes('already connected') && 
+                          !err.message.includes('Connection already exists')) {
+                        addLog(`连接尝试失败: ${err.message}`, 'error');
+                      }
+                    });
+                }
+              }, delayTime);
             }
             
             // 获取对方IP信息

@@ -28,6 +28,19 @@ export default async function handler(req, res) {
       return res.status(404).json({ message: '房间不存在' });
     }
     
+    // 检查是否已经注册了相同的peerId
+    const existingPeer = room.peers?.find(p => p.id === peerId);
+    if (existingPeer) {
+      console.log(`已存在相同的PeerId: ${peerId}, 跳过注册`);
+      return res.status(200).json({
+        success: true,
+        peerId,
+        roomId,
+        ip: clientIP,
+        alreadyRegistered: true
+      });
+    }
+    
     // 添加PeerId到房间信息
     const peerType = isInitiator ? 'initiator' : 'receiver';
     const peerInfo = {
@@ -42,8 +55,8 @@ export default async function handler(req, res) {
       room.peers = [];
     }
     
-    // 检查peerId是否已存在
-    const existingPeerIndex = room.peers.findIndex(p => p.id === peerId || p.ip === clientIP);
+    // 检查IP是否已存在，如果存在则替换而不是添加
+    const existingPeerIndex = room.peers.findIndex(p => p.ip === clientIP);
     if (existingPeerIndex >= 0) {
       room.peers[existingPeerIndex] = peerInfo;
     } else {

@@ -19,9 +19,15 @@ export default async function handler(req, res) {
       return res.status(404).json({ message: '房间不存在' });
     }
     
+    // 查找自己的角色信息
+    const selfPeer = room.peers?.find(p => p.id === peerId);
+    const isSelfInitiator = selfPeer?.type === 'initiator';
+    
     // 查找自己以外的其他peer
     let remotePeerId = null;
     let remotePeerType = null;
+    let shouldInitiateConnection = false;
+    let connectionPriority = 'normal';
     
     if (room.peers && room.peers.length > 0) {
       // 严格筛选：必须不是自己的peerId
@@ -38,6 +44,14 @@ export default async function handler(req, res) {
           remotePeerId = null;
           remotePeerType = null;
         }
+        
+        // 修改连接策略：双方都可以尝试发起连接
+        // 为避免同时连接冲突，可以基于Peer ID字典序决定连接优先级
+        const localPeerIdSorted = peerId.localeCompare(remotePeerId);
+        shouldInitiateConnection = true; // 允许双方都发起连接
+        
+        // 添加一个额外参数表示连接优先级，以减少竞争条件
+        connectionPriority = localPeerIdSorted < 0 ? 'high' : 'normal';
       }
     }
     
@@ -54,7 +68,9 @@ export default async function handler(req, res) {
       remotePeerType,
       ipInfo,
       timestamp: Date.now(),
-      peerCount: room.peers ? room.peers.length : 0
+      peerCount: room.peers ? room.peers.length : 0,
+      shouldInitiateConnection, // 双方都可以主动连接
+      connectionPriority // 添加连接优先级参数
     });
   } catch (error) {
     console.error('Polling error:', error);
