@@ -30,6 +30,10 @@ export default function Room() {
   const [videoStream, setVideoStream] = useState(null);
   const [pollingId, setPollingId] = useState(null);
   
+  // 添加缺失的延迟状态变量
+  const [httpLatency, setHttpLatency] = useState(null);
+  const [p2pLatency, setP2pLatency] = useState(null);
+  
   // 连接状态跟踪
   const [httpPollingActive, setHttpPollingActive] = useState(false);
   const [p2pConnectionActive, setP2pConnectionActive] = useState(false);
@@ -49,6 +53,9 @@ export default function Room() {
   // 使用useRef来跟踪初始化状态，这比useState更可靠防止重复初始化
   const initRef = useRef(false);
   const registrationRef = useRef(false);
+  
+  // 添加ref来保存connection对象的引用
+  const connectionRef = useRef(null);
 
   // 添加日志
   const addLog = useCallback((message, level = 'info') => {
@@ -137,6 +144,7 @@ export default function Room() {
       addLog(`初始化P2P连接...`);
       await p2pConnection.init();
       setConnection(p2pConnection);
+      connectionRef.current = p2pConnection; // 保存连接对象到ref
       
       // 为媒体流注册回调
       p2pConnection.onMediaStream((stream, type) => {
@@ -247,8 +255,16 @@ export default function Room() {
       }
       
       try {
+        // 记录HTTP轮询开始时间
+        const pollStartTime = Date.now();
+        
         const res = await fetch(`/api/signaling/poll?roomId=${roomId}&peerId=${peerId}`);
         const data = await res.json();
+        
+        // 计算HTTP轮询延迟
+        const pollEndTime = Date.now();
+        const latency = pollEndTime - pollStartTime;
+        setHttpLatency(latency);
         
         if (res.ok && data.remotePeerId) {
           // 严格检查：确保不是自己
@@ -390,8 +406,27 @@ export default function Room() {
     setP2pConnectionActive(true);
     setDataChannelActive(true);
     
+    // 确保远程PeerId在连接时被设置（加入对方ID）
+    if (conn && conn.peer && !remotePeerId) {
+      setRemotePeerId(conn.peer);
+      addLog(`已获取对方ID: ${conn.peer}`, 'info');
+    }
+    
     // 尝试获取对方IP信息
     fetchPeerIPInfo();
+    
+    // 使用ref获取最新的连接对象
+    if (connectionRef.current) {
+      // 确保延迟测量在连接建立后开始，并添加一个小延迟确保连接稳定
+      setTimeout(() => {
+        addLog('开始测量连接延迟...', 'info');
+        connectionRef.current.startLatencyMeasurement((latency) => {
+          setP2pLatency(latency);
+        });
+      }, 1000);
+    } else {
+      addLog('无法开始延迟测量：连接对象不可用', 'warn');
+    }
   };
 
   // 获取对方IP信息
@@ -466,6 +501,12 @@ export default function Room() {
     setVideoStream(null);
     setP2pConnectionActive(false);
     setDataChannelActive(false);
+    setP2pLatency(null); // 重置P2P延迟
+    
+    // 停止延迟测量
+    if (connectionRef.current) {
+      connectionRef.current.stopLatencyMeasurement();
+    }
     
     // 添加：当连接断开时，重新启动轮询以尝试重新连接
     // 确保只有在已经停止轮询时才重新启动
@@ -761,6 +802,8 @@ export default function Room() {
               isInitiator={isInitiator}
               peerId={peerId}
               remotePeerId={remotePeerId}
+              httpLatency={httpLatency}
+              p2pLatency={p2pLatency}
             />
             
             {/* 聊天 */}

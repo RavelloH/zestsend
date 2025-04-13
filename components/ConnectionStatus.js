@@ -8,27 +8,43 @@ export default function ConnectionStatus({
   isInitiator,
   peerId,
   remotePeerId,
+  httpLatency,
+  p2pLatency,
   className = ''
 }) {
   // 定义状态指示器
-  const renderStatusIndicator = (title, isActive, icon, description) => (
+  const renderStatusIndicator = (title, isActive, icon, description, latency = null) => (
     <div className="flex items-center space-x-2">
       <div className={`flex items-center justify-center w-8 h-8 rounded-full ${
         isActive ? 'bg-green-100 dark:bg-green-900/50' : 'bg-yellow-100 dark:bg-yellow-900/50'
       }`}>
         {icon}
       </div>
-      <div>
-        <p className="font-medium text-sm flex items-center text-gray-800 dark:text-gray-200">
-          {title}
-          <span className={`ml-2 inline-block w-2 h-2 rounded-full ${
-            isActive ? 'bg-green-500' : 'bg-yellow-500'
-          }`}></span>
+      <div className="flex-1">
+        <p className="font-medium text-sm flex items-center justify-between text-gray-800 dark:text-gray-200">
+          <span className="flex items-center">
+            {title}
+            <span className={`ml-2 inline-block w-2 h-2 rounded-full ${
+              isActive ? 'bg-green-500' : 'bg-yellow-500'
+            }`}></span>
+          </span>
+          {latency !== null && (
+            <span className={`text-xs font-mono ${getLatencyColorClass(latency)}`}>
+              {latency}ms
+            </span>
+          )}
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">{description}</p>
       </div>
     </div>
   );
+
+  // 根据延迟值获取颜色类
+  const getLatencyColorClass = (latency) => {
+    if (latency < 100) return 'text-green-500';
+    if (latency < 300) return 'text-yellow-500';
+    return 'text-red-500';
+  };
 
   return (
     <motion.div
@@ -44,14 +60,16 @@ export default function ConnectionStatus({
           'HTTP 轮询', 
           httpPolling, 
           <FiServer className={httpPolling ? 'text-green-500' : 'text-yellow-500'} />, 
-          httpPolling ? '服务器轮询正常' : '等待服务器连接...'
+          httpPolling ? '服务器轮询正常' : '等待服务器连接...',
+          httpLatency
         )}
         
         {renderStatusIndicator(
           'P2P 连接', 
           p2pConnection, 
           <FiWifi className={p2pConnection ? 'text-green-500' : 'text-yellow-500'} />, 
-          p2pConnection ? '已建立P2P连接' : '等待P2P连接...'
+          p2pConnection ? '已建立P2P连接' : '等待P2P连接...',
+          p2pLatency
         )}
         
         {renderStatusIndicator(
@@ -74,17 +92,17 @@ export default function ConnectionStatus({
           {peerId && (
             <div className="text-xs truncate">
               <span className="text-gray-500 dark:text-gray-400">本地ID:</span> 
-              <span className="ml-2 font-mono bg-gray-100 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">
-                {peerId.substring(0, 16)}...
+              <span className="ml-2 font-mono bg-gray-100 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200 text-xs break-all">
+                {peerId}
               </span>
             </div>
           )}
           
           {remotePeerId && (
-            <div className="text-xs truncate">
+            <div className="text-xs">
               <span className="text-gray-500 dark:text-gray-400">远程ID:</span> 
-              <span className="ml-2 font-mono bg-gray-100 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200">
-                {remotePeerId.substring(0, 16)}...
+              <span className="ml-2 font-mono bg-gray-100 dark:bg-gray-700 px-1 rounded text-gray-800 dark:text-gray-200 text-xs break-all">
+                {remotePeerId}
               </span>
             </div>
           )}
