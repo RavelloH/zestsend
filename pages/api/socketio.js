@@ -30,14 +30,18 @@ const redisKeys = {
   // 会话相关
   socketSession: (socketId) => `zstsess:socket:${socketId}`,
   sessionSocket: (sessionId) => `zstsess:session:${sessionId}`,
+  // 会话备份索引 (新增)
+  sessionBackup: (sessionId) => `zstsess:backup:${sessionId}`,
   // 房间相关
   roomInfo: (roomId) => `zstsess:room:${roomId}:info`,
   roomUsers: (roomId) => `zstsess:room:${roomId}:users`,
   roomInitiator: (roomId) => `zstsess:room:${roomId}:initiator`,
   // Socket.IO 原生键名
   socketioSession: (sid) => `socketio:${sid}`,
-  // Socket.IO Engine会话数据 (添加新的键类型)
-  engineSession: (sid) => `zstsess:engine:${sid}`
+  // Socket.IO Engine会话数据
+  engineSession: (sid) => `zstsess:engine:${sid}`,
+  // 会话错误记录
+  sessionError: (sessionId) => `zstsess:error:${sessionId}`
 };
 
 export default async function SocketHandler(req, res) {
@@ -159,10 +163,19 @@ export default async function SocketHandler(req, res) {
       // 存储Socket会话映射到Redis
       async storeSocketSession(socketId, sessionId) {
         try {
+          // 主要映射关系
           await pubClient.pipeline()
             .set(redisKeys.socketSession(socketId), sessionId, 'EX', SESSION_EXPIRY)
             .set(redisKeys.sessionSocket(sessionId), socketId, 'EX', SESSION_EXPIRY)
             .exec();
+            
+          // 保存备份
+          await this.saveSessionBackup(sessionId, socketId);
+          await this.saveSessionBackup(sessionId, { 
+            socketId, 
+            lastUpdate: Date.now() 
+          });
+          
           return true;
         } catch (err) {
           debugLog('存储Socket会话失败', { error: err.message });
@@ -349,8 +362,22 @@ export default async function SocketHandler(req, res) {
       // 清理Socket.IO会话
       async cleanupSocketIOSession(sid) {
         try {
+          // 首先获取Engine会话信息
+          const engineSession = await this.getEngineSession(sid);
+          
+          if (engineSession && engineSession.clientSessionId) {
+            // 备份Engine会话数据
+            await this.saveSessionBackup(engineSession.clientSessionId, { 
+              engineSession: sid,
+              lastSeen: Date.now(),
+              wasCleanedUp: true
+            });
+          }
+          
+          // 删除主要keys
           await pubClient.del(redisKeys.socketioSession(sid));
           await pubClient.del(redisKeys.engineSession(sid));
+          
           return true;
         } catch (err) {
           debugLog('清理Socket.IO会话失败', { error: err.message });
@@ -382,6 +409,92 @@ export default async function SocketHandler(req, res) {
           return data ? JSON.parse(data) : null;
         } catch (err) {
           debugLog('获取Engine会话数据失败', { error: err.message });
+          return null;
+        }
+      },
+      
+      // 新增: 保存会话备份信息
+      async saveSessionBackup(sessionId, data) {
+        try {
+          // 使用Hash存储会话的多个可能的socket ID和其他信息
+          const backupKey = redisKeys.sessionBackup(sessionId);
+          
+          // 如果是socket ID值，添加到set中
+          if (typeof data === 'string' && data.includes('-')) {
+            await pubClient.sadd(`${backupKey}:sockets`, data);
+            await pubClient.expire(`${backupKey}:sockets`, SESSION_EXPIRY);
+          } else if (typeof data === 'object') {
+            // 保存会话详细信息
+            await pubClient.hset(backupKey, {
+              ...data,
+              timestamp: Date.now()
+            });
+            await pubClient.expire(backupKey, SESSION_EXPIRY);
+          }
+          return true;
+        } catch (err) {
+          debugLog('保存会话备份失败', { error: err.message });
+          return false;
+        }
+      },
+      
+      // 新增: 获取会话备份的所有socket ID
+      async getSessionBackupSockets(sessionId) {
+        try {
+          const backupKey = `${redisKeys.sessionBackup(sessionId)}:sockets`;
+          const sockets = await pubClient.smembers(backupKey);
+          return sockets || [];
+        } catch (err) {
+          debugLog('获取会话备份socket ID失败', { error: err.message });
+          return [];
+        }
+      },
+      
+      // 新增: 获取会话备份详细信息
+      async getSessionBackupInfo(sessionId) {
+        try {
+          const backupKey = redisKeys.sessionBackup(sessionId);
+          const info = await pubClient.hgetall(backupKey);
+          return info || null;
+        } catch (err) {
+          debugLog('获取会话备份信息失败', { error: err.message });
+          return null;
+        }
+      },
+      
+      // 新增: 记录会话错误详情
+      async logSessionError(sessionId, errorInfo) {
+        try {
+          await pubClient.set(
+            redisKeys.sessionError(sessionId),
+            JSON.stringify({
+              ...errorInfo,
+              timestamp: Date.now()
+            }),
+            'EX',
+            300 // 5分钟过期
+          );
+          
+          // 同时添加到备份信息中
+          await this.saveSessionBackup(sessionId, {
+            lastError: JSON.stringify(errorInfo),
+            errorTime: Date.now()
+          });
+          
+          return true;
+        } catch (err) {
+          debugLog('记录会话错误失败', { error: err.message });
+          return false;
+        }
+      },
+      
+      // 新增: 获取会话错误详情
+      async getSessionError(sessionId) {
+        try {
+          const error = await pubClient.get(redisKeys.sessionError(sessionId));
+          return error ? JSON.parse(error) : null;
+        } catch (err) {
+          debugLog('获取会话错误信息失败', { error: err.message });
           return null;
         }
       }
@@ -477,18 +590,64 @@ export default async function SocketHandler(req, res) {
               const engineSession = await redisSession.getEngineSession(sid);
               if (engineSession) {
                 debugLog(`找到Engine会话数据: ${sid}`);
-                // 我们发现了旧会话，但无法直接恢复，清理它
-                await redisSession.cleanupSocketIOSession(sid);
+                
+                // 获取与之关联的客户端会话ID
+                const clientSessionId = engineSession.clientSessionId || url.searchParams.get('sessionId');
+                
+                if (clientSessionId) {
+                  // 获取会话备份信息
+                  const backupSockets = await redisSession.getSessionBackupSockets(clientSessionId);
+                  debugLog(`会话 ${clientSessionId} 的备份socket IDs: ${backupSockets.length}`);
+                  
+                  const backupInfo = await redisSession.getSessionBackupInfo(clientSessionId);
+                  debugLog(`会话 ${clientSessionId} 的备份信息:`, backupInfo);
+                  
+                  // 记录会话错误信息，包含尽可能多的上下文
+                  const sessionErrorInfo = {
+                    sid,
+                    clientSessionId,
+                    roomId: engineSession.roomId || url.searchParams.get('roomId'),
+                    time: Date.now(),
+                    error: 'session_id_unknown',
+                    backupSocketCount: backupSockets.length,
+                    hasBackupInfo: !!backupInfo,
+                    engineSessionData: engineSession
+                  };
+                  
+                  // 保存错误信息
+                  await redisSession.logSessionError(clientSessionId, sessionErrorInfo);
+                  
+                  // 清理旧的Engine会话，让客户端可以重建
+                  await redisSession.cleanupSocketIOSession(sid);
+                  
+                  // 尝试验证备份中的所有socket，可能有一个还是有效的
+                  if (backupSockets.length > 0) {
+                    for (const oldSocketId of backupSockets) {
+                      // 尝试检查这个socket ID是否还有效
+                      const oldSessionId = await redisSession.getSessionIdBySocketId(oldSocketId);
+                      if (oldSessionId === clientSessionId) {
+                        debugLog(`找到有效的备份socket: ${oldSocketId}`);
+                        
+                        // 重新生成主存储中的映射
+                        await redisSession.storeSocketSession(oldSocketId, clientSessionId);
+                      } else {
+                        // 清理无效的备份socket
+                        await pubClient.srem(`${redisKeys.sessionBackup(clientSessionId)}:sockets`, oldSocketId);
+                      }
+                    }
+                  }
+                }
               } else {
                 debugLog(`未找到Engine会话数据: ${sid}`);
               }
               
-              // 检查URL中是否有sessionId和roomId
+              // 处理URL中提供的会话ID
               const clientSessionId = url.searchParams.get('sessionId');
               const roomId = url.searchParams.get('roomId');
               
               if (clientSessionId) {
                 debugLog(`URL中包含会话ID: ${clientSessionId}`);
+                
                 // 找到与此会话ID关联的Socket ID
                 const existingSocketId = await redisSession.getSocketIdBySessionId(clientSessionId);
                 if (existingSocketId) {
@@ -766,23 +925,37 @@ export default async function SocketHandler(req, res) {
             const existingSocketId = await redisSession.getSocketIdBySessionId(sessionId);
             if (existingSocketId && existingSocketId !== socket.id) {
               debugLog(`会话ID已关联到其他Socket: ${existingSocketId}, 更新为当前Socket: ${socket.id}`);
+              
+              // 保存旧的socket ID作为备份
+              await redisSession.saveSessionBackup(sessionId, existingSocketId);
             }
             
             // 保存新的映射关系
             await redisSession.storeSocketSession(socket.id, sessionId);
             debugLog(`会话ID已存储到Redis: ${sessionId}`);
             
+            // 获取Engine会话数据并保存，增强会话持久性
+            const engineData = {
+              id: socket.id,
+              clientSessionId: sessionId,
+              roomId: socket.roomId || socket.handshake.query.roomId,
+              transport: socket.conn.transport.name,
+              time: Date.now(),
+              userAgent: socket.handshake.headers['user-agent']
+            };
+            
+            await redisSession.saveEngineSession(socket.id, engineData);
+            
             // 检查是否有会话错误记录
-            const errorData = await pubClient.get(`zstsess:error:${sessionId}`);
+            const errorData = await redisSession.getSessionError(sessionId);
             if (errorData) {
-              debugLog(`发现会话错误记录: ${sessionId}`);
-              const parsedData = JSON.parse(errorData);
+              debugLog(`发现会话错误记录: ${sessionId}`, errorData);
               
               // 通知客户端有会话错误
-              socket.emit('session-error-detected', parsedData);
+              socket.emit('session-error-detected', errorData);
               
               // 清除错误记录
-              await pubClient.del(`zstsess:error:${sessionId}`);
+              await pubClient.del(redisKeys.sessionError(sessionId));
             }
           }
           
@@ -1176,6 +1349,85 @@ export default async function SocketHandler(req, res) {
                 socket.emit('error', { message: '房间不存在' });
               }
             }
+          }
+        });
+
+        // 新增: 高级会话检查和恢复
+        socket.on('advanced-session-check', async (data) => {
+          const { sessionId, previousSockets = [] } = data || {};
+          
+          if (!sessionId || !redisSession) {
+            socket.emit('advanced-session-status', { 
+              success: false, 
+              message: 'Missing session ID or Redis unavailable' 
+            });
+            return;
+          }
+          
+          try {
+            // 获取会话的各种信息
+            const currentSocketId = await redisSession.getSocketIdBySessionId(sessionId);
+            const backupSockets = await redisSession.getSessionBackupSockets(sessionId);
+            const backupInfo = await redisSession.getSessionBackupInfo(sessionId);
+            const sessionError = await redisSession.getSessionError(sessionId);
+            
+            // 创建状态报告
+            const statusReport = {
+              success: true,
+              currentSocketId,
+              socketId: socket.id,
+              hasCurrentMapping: !!currentSocketId,
+              backupSocketCount: backupSockets.length,
+              hasBackupInfo: !!backupInfo,
+              hasError: !!sessionError,
+              timestamp: Date.now()
+            };
+            
+            // 检查提供的之前的sockets是否还有效
+            if (previousSockets.length > 0) {
+              const validSockets = [];
+              for (const oldSocketId of previousSockets) {
+                // 验证此socketId是否仍与此会话关联
+                const oldSessionId = await redisSession.getSessionIdBySocketId(oldSocketId);
+                if (oldSessionId === sessionId) {
+                  validSockets.push(oldSocketId);
+                }
+              }
+              statusReport.validPreviousSockets = validSockets;
+            }
+            
+            // 如果当前映射不存在，但有可能恢复的socket
+            if (!currentSocketId && backupSockets.length > 0) {
+              // 找到最近的有效备份
+              const recoveryCandidate = backupSockets[0]; // 简单起见取第一个
+              statusReport.recoveryCandidate = recoveryCandidate;
+              statusReport.recoveryRecommended = true;
+            }
+            
+            // 如果有错误记录，提供错误信息
+            if (sessionError) {
+              statusReport.errorDetails = sessionError;
+            }
+            
+            // 发送状态报告给客户端
+            socket.emit('advanced-session-status', statusReport);
+            
+            // 同时更新会话映射
+            await redisSession.storeSocketSession(socket.id, sessionId);
+            
+            // 记录诊断信息
+            if (!currentSocketId || currentSocketId !== socket.id) {
+              debugLog(`会话映射更新：${sessionId}`, { 
+                oldSocketId: currentSocketId || 'none', 
+                newSocketId: socket.id 
+              });
+            }
+          } catch (err) {
+            debugLog('高级会话检查失败', { error: err.message });
+            socket.emit('advanced-session-status', { 
+              success: false, 
+              error: err.message 
+            });
           }
         });
       });

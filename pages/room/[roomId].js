@@ -93,6 +93,16 @@ export default function Room() {
     forceConnect: false
   });
   
+  // 添加新的state，跟踪会话状态
+  const [sessionHealth, setSessionHealth] = useState({
+    status: 'unknown',
+    lastCheck: null,
+    recoveryAttempts: 0
+  });
+  
+  // 添加引用，跟踪已知的socket IDs
+  const knownSocketIdsRef = useRef([]);
+  
   // 获取本地IP信息
   useEffect(() => {
     const fetchIpInfo = async () => {
@@ -578,6 +588,17 @@ export default function Room() {
     const socket = io(socketURL, socketOptions);
     socketRef.current = socket;
     
+    // 添加socket ID到已知列表
+    socket.on('connect', () => {
+      if (socket.id && !knownSocketIdsRef.current.includes(socket.id)) {
+        knownSocketIdsRef.current.push(socket.id);
+        // 限制列表长度，保留最新的10个
+        if (knownSocketIdsRef.current.length > 10) {
+          knownSocketIdsRef.current = knownSocketIdsRef.current.slice(-10);
+        }
+      }
+    });
+    
     // 全局监听连接事件
     socket.io.on('error', (err) => {
       console.error('Socket.io 低级错误:', err);
@@ -604,6 +625,12 @@ export default function Room() {
       console.log('信令服务器已连接, socket ID:', socket.id, '传输类型:', socket.io.engine.transport.name);
       isSocketConnectedRef.current = true;
       setStatusMessage('已连接到服务器，正在加入房间...');
+      
+      // 执行高级会话检查
+      socket.emit('advanced-session-check', { 
+        sessionId: sessionIdRef.current,
+        previousSockets: knownSocketIdsRef.current
+      });
       
       // 检查是否有会话错误
       socket.emit('check-session-error', { sessionId: sessionIdRef.current });
@@ -687,6 +714,44 @@ export default function Room() {
       setErrorMessage(`检测到会话问题: ${data.error}。请尝试重置会话或重新连接。`);
       
       // 您可以添加自动恢复逻辑，或者让用户手动操作
+    });
+    
+    // 监听高级会话状态响应
+    socket.on('advanced-session-status', (report) => {
+      console.log('高级会话状态报告:', report);
+      
+      setSessionHealth(prev => ({
+        ...prev,
+        status: report.success ? 'healthy' : 'unhealthy',
+        lastCheck: new Date().toISOString(),
+        report
+      }));
+      
+      // 如果报告建议恢复
+      if (report.success && report.recoveryRecommended) {
+        console.log('会话需要恢复，准备进行恢复操作');
+        
+        // 增加恢复尝试计数
+        setSessionHealth(prev => ({
+          ...prev,
+          recoveryAttempts: prev.recoveryAttempts + 1
+        }));
+        
+        // 如果尝试次数少于3次，尝试自动恢复
+        if (sessionHealth.recoveryAttempts < 3) {
+          console.log('自动执行恢复操作');
+          // 这里可以执行自定义的恢复逻辑，例如重连或刷新连接
+        } else {
+          // 提示用户手动重置
+          setErrorMessage(`会话状态异常，多次自动恢复失败。请点击"重置会话"按钮重新连接。`);
+        }
+      }
+      
+      // 如果有错误详情，提示用户
+      if (report.hasError && report.errorDetails) {
+        console.log('会话存在错误:', report.errorDetails);
+        setErrorMessage(`检测到会话问题: ${report.errorDetails.error}。请尝试重置连接。`);
+      }
     });
     
     // 房间状态事件 - 简化以确保一致处理
@@ -828,7 +893,8 @@ export default function Room() {
         sessionId: sessionIdRef.current,
         roomId: roomId,
         attempts: socket.io.reconnectionAttempts,
-        opts: socket.io.opts
+        opts: socket.io.opts,
+        knownSockets: knownSocketIdsRef.current
       };
       console.log('连接错误详情:', errorDetails);
       
@@ -836,24 +902,21 @@ export default function Room() {
       setConnectionStatus('error');
       setErrorMessage(`连接服务器失败: ${err.message || '未知错误'}`);
       
+      // 更新会话健康状态
+      setSessionHealth(prev => ({
+        ...prev,
+        status: 'error',
+        lastError: errorDetails,
+        lastErrorTime: new Date().toISOString()
+      }));
+      
       // 检查是否是会话ID错误，这种情况下尝试清除会话并重新连接
       if (err.message && (
           err.message.includes('Session ID unknown') || 
           err.message.includes('session') || 
           err.message.includes('sid')
       )) {
-        console.log('检测到会话错误，尝试清除会话ID并重新连接');
-        
-        // 生成新的会话ID
-        const newSessionId = nanoid(10);
-        console.log(`重新生成会话ID: ${sessionIdRef.current} -> ${newSessionId}`);
-        sessionIdRef.current = newSessionId;
-        localStorage.setItem('zestsend_session_id', newSessionId);
-        
-        // 更新错误消息，提供更具体的指导
-        setErrorMessage(`会话ID错误，已生成新ID: ${newSessionId.substring(0,8)}。请点击"重置会话"按钮重试连接。`);
-        
-        // 不要自动重连，而是让用户手动操作，这样更可控
+        handleSessionError(err);
       }
       
       // 尝试使用不同的传输方式
@@ -931,8 +994,148 @@ export default function Room() {
         isSocketConnectedRef.current = false;
       }
     };
-  }, [roomId, createPeerConnection, handleReceivedSignal, connectionStatus]);
+  }, [roomId, createPeerConnection, handleReceivedSignal, connectionStatus, sessionHealth.recoveryAttempts]);
 
+  // 新增: 处理会话错误的专用函数
+  const handleSessionError = (err) => {
+    console.log('检测到会话错误，准备恢复会话');
+    
+    // 根据会话健康状态选择不同的恢复策略
+    if (sessionHealth.recoveryAttempts < 2) {
+      // 尝试不重置会话ID的轻量级恢复
+      console.log('尝试轻量级会话恢复 (保留会话ID)');
+      
+      // 断开当前连接
+      if (socketRef.current) {
+        // 清理心跳
+        if (socketRef.current.heartbeatInterval) {
+          clearInterval(socketRef.current.heartbeatInterval);
+        }
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      
+      // 更新状态
+      setConnectionStatus('waiting');
+      setStatusMessage('正在尝试恢复会话连接...');
+      
+      // 短暂延迟后重新连接
+      setTimeout(() => {
+        // 重新连接时使用相同的会话ID
+        connectWithSessionId(sessionIdRef.current);
+      }, 1500);
+      
+      // 增加恢复尝试计数
+      setSessionHealth(prev => ({
+        ...prev,
+        recoveryAttempts: prev.recoveryAttempts + 1,
+        lastRecoveryTime: new Date().toISOString()
+      }));
+    } else {
+      // 多次恢复失败，提示用户重置会话
+      console.log('多次恢复失败，需要完全重置会话');
+      
+      // 生成新的会话ID
+      const newSessionId = nanoid(10);
+      console.log(`重新生成会话ID: ${sessionIdRef.current} -> ${newSessionId}`);
+      
+      // 更新错误消息，提供更具体的指导
+      setErrorMessage(`会话错误无法自动恢复。已生成新会话ID: ${newSessionId.substring(0,8)}。请点击"重置会话"按钮重试连接。`);
+      
+      // 不要自动重置，而是让用户手动操作，更可控
+      // 但预先生成会话ID，以便用户点击时使用
+      sessionIdRef.current = newSessionId;
+      localStorage.setItem('zestsend_session_id', newSessionId);
+      
+      // 重置恢复尝试计数
+      setSessionHealth(prev => ({
+        ...prev,
+        recoveryAttempts: 0,
+        status: 'reset-pending',
+        lastResetTime: new Date().toISOString()
+      }));
+    }
+  };
+  
+  // 新增: 使用指定会话ID连接的辅助函数
+  const connectWithSessionId = (sessionId) => {
+    // 获取完整的服务器URL
+    let socketURL = window.location.origin;
+    if (process.env.NODE_ENV === 'development') {
+      socketURL = 'http://localhost:3000';
+    }
+    
+    // 创建新的Socket连接
+    const socket = io(socketURL, {
+      path: '/api/socketio',
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 10000,
+      timeout: 30000,
+      transports: ['polling'],
+      upgrade: false,
+      forceNew: true,
+      autoConnect: true,
+      rejectUnauthorized: false,
+      query: {
+        sessionId: sessionId,
+        roomId: roomId,
+        _t: Date.now(), // 时间戳防止缓存
+        recovery: 'true' // 标记这是恢复连接
+      }
+    });
+    
+    socketRef.current = socket;
+    
+    // 设置基本的事件监听器
+    socket.on('connect', () => {
+      console.log(`已与信令服务器建立新连接, socket ID: ${socket.id}`);
+      isSocketConnectedRef.current = true;
+      setStatusMessage('已重新连接到服务器，正在恢复会话...');
+      
+      // 记录新的socket ID
+      if (!knownSocketIdsRef.current.includes(socket.id)) {
+        knownSocketIdsRef.current.push(socket.id);
+      }
+      
+      // 注册会话
+      socket.emit('register-session', sessionId);
+      socket.emit('join-room', roomId, sessionId);
+      
+      // 设置新的心跳检测
+      const heartbeatInterval = setInterval(() => {
+        if (socket.connected) {
+          socket.emit('heartbeat');
+        }
+      }, 30000);
+      
+      socket.heartbeatInterval = heartbeatInterval;
+      
+      // 执行高级会话检查
+      setTimeout(() => {
+        socket.emit('advanced-session-check', {
+          sessionId: sessionId,
+          previousSockets: knownSocketIdsRef.current
+        });
+      }, 1000);
+    });
+    
+    // 处理连接错误
+    socket.on('connect_error', (err) => {
+      console.error('恢复连接时出错:', err);
+      setErrorMessage(`恢复连接时出错: ${err.message}`);
+      
+      // 更新会话健康状态
+      setSessionHealth(prev => ({
+        ...prev,
+        status: 'failed-recovery',
+        lastError: err.message
+      }));
+    });
+    
+    return socket;
+  };
+  
   // 测试信令服务器连接
   const testConnection = () => {
     if (!socketRef.current || !isSocketConnectedRef.current) {
@@ -971,76 +1174,28 @@ export default function Room() {
       socketRef.current = null;
     }
     
-    // 重置计数器
+    // 重置状态和引用
     connectAttemptsRef.current = 0;
-    
-    // 清除所有缓存的信息
-    remoteSessionIdRef.current = null; // 重要：清除远程会话ID缓存
+    remoteSessionIdRef.current = null;
     pendingCandidatesRef.current = [];
     remoteDescriptionSetRef.current = false;
+    knownSocketIdsRef.current = []; // 清空已知socket列表
     
-    // 更新状态
+    // 重置会话健康状态
+    setSessionHealth({
+      status: 'reset',
+      lastCheck: new Date().toISOString(),
+      recoveryAttempts: 0
+    });
+    
+    // 更新UI状态
     setConnectionStatus('waiting');
     setStatusMessage('正在重置连接...');
     
-    // 重新初始化Socket连接
+    // 延迟一段时间后重新连接，确保旧连接完全清理
     setTimeout(() => {
-      // 获取完整的服务器URL
-      let socketURL = window.location.origin;
-      if (process.env.NODE_ENV === 'development') {
-        socketURL = 'http://localhost:3000';
-      }
-      
-      // 创建新的Socket连接
-      const socket = io(socketURL, {
-        path: '/api/socketio',
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 10000,
-        timeout: 30000,
-        transports: ['polling'],
-        upgrade: false,
-        forceNew: true,
-        autoConnect: true,
-        rejectUnauthorized: false,
-        query: {
-          sessionId: newSessionId,
-          roomId: roomId,
-          reset: 'true',
-          _t: Date.now() // 添加时间戳防止缓存问题
-        }
-      });
-      
-      socketRef.current = socket;
-      
-      // 重新注册事件监听器 - 此处简化，实际应该复用代码
-      socket.on('connect', () => {
-        console.log('已重新连接到信令服务器');
-        isSocketConnectedRef.current = true;
-        setStatusMessage('已重新连接到服务器，正在加入房间...');
-        
-        socket.emit('register-session', newSessionId);
-        socket.emit('join-room', roomId, newSessionId);
-        
-        // 设置新的心跳检测
-        const heartbeatInterval = setInterval(() => {
-          if (socket.connected) {
-            socket.emit('heartbeat');
-          }
-        }, 30000);
-        
-        socket.heartbeatInterval = heartbeatInterval;
-      });
-      
-      // 添加错误处理器
-      socket.on('connect_error', (err) => {
-        console.error('重连时出错:', err);
-        setErrorMessage(`重连时出错: ${err.message}`);
-      });
-      
-      // 记录成功信息
-      console.log('已初始化新的Socket连接');
-    }, 1000);
+      connectWithSessionId(newSessionId);
+    }, 1500);
   };
   
   // 作为发起方强制连接
@@ -1237,7 +1392,7 @@ export default function Room() {
             </div>
             
             {/* 高级诊断信息 */}
-            <div className="mt-8 text-left">
+            <div className="mt-8 text左">
               <details>
                 <summary className="cursor-pointer text-sm font-medium mb-2 text-primary-600 dark:text-primary-400">
                   显示诊断信息
@@ -1254,7 +1409,9 @@ export default function Room() {
                       pendingCandidates: pendingCandidatesRef.current.length,
                       isRemoteDescriptionSet: remoteDescriptionSetRef.current,
                       connectionAttempts: connectAttemptsRef.current,
-                      diagnostics: connectionDiagnostics
+                      diagnostics: connectionDiagnostics,
+                      sessionHealth,
+                      knownSockets: knownSocketIdsRef.current
                     }, null, 2)}
                   </pre>
                 </div>
