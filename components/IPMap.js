@@ -37,17 +37,32 @@ export default function IPMap({ ipInfo, peerIpInfo }) {
   useEffect(() => {
     // 如果有两个IP地址，计算距离
     if (ipInfo?.latitude && ipInfo?.longitude && peerIpInfo?.latitude && peerIpInfo?.longitude) {
-      const lat1 = parseFloat(ipInfo.latitude);
-      const lng1 = parseFloat(ipInfo.longitude);
-      const lat2 = parseFloat(peerIpInfo.latitude);
-      const lng2 = parseFloat(peerIpInfo.longitude);
-      
-      // 计算两点间的距离
-      const calculatedDistance = calculateDistance(lat1, lng1, lat2, lng2);
-      setDistance(calculatedDistance);
+      try {
+        const lat1 = parseFloat(ipInfo.latitude);
+        const lng1 = parseFloat(ipInfo.longitude);
+        const lat2 = parseFloat(peerIpInfo.latitude);
+        const lng2 = parseFloat(peerIpInfo.longitude);
+        
+        if (!isNaN(lat1) && !isNaN(lng1) && !isNaN(lat2) && !isNaN(lng2)) {
+          // 计算两点间的距离
+          const calculatedDistance = calculateDistance(lat1, lng1, lat2, lng2);
+          setDistance(calculatedDistance);
+        } else {
+          setDistance(null);
+        }
+      } catch (error) {
+        console.error("计算距离出错:", error);
+        setDistance(null);
+      }
     } else {
       setDistance(null);
     }
+  }, [ipInfo, peerIpInfo]);
+
+  // 调试输出，检查IP数据
+  useEffect(() => {
+    console.log("本地IP信息:", ipInfo);
+    console.log("对方IP信息:", peerIpInfo);
   }, [ipInfo, peerIpInfo]);
 
   if (!ipInfo) {
@@ -94,17 +109,26 @@ export default function IPMap({ ipInfo, peerIpInfo }) {
               <FiMapPin className="mr-1" /> 您的位置
             </h4>
             <p className="text-xs text-gray-600 dark:text-gray-300">
-              {ipInfo.ip} - {ipInfo.city}, {ipInfo.region}, {ipInfo.country_name}
+              {ipInfo.ip} - {ipInfo.city || '未知城市'}, {ipInfo.region || '未知地区'}, {ipInfo.country_name || '未知国家'}
             </p>
           </div>
           
-          {peerIpInfo && (
+          {peerIpInfo ? (
             <div className="flex-1 p-2 rounded-md bg-green-50 dark:bg-green-900/30">
               <h4 className="font-medium text-sm flex items-center">
                 <FiMapPin className="mr-1" /> 对方位置
               </h4>
               <p className="text-xs text-gray-600 dark:text-gray-300">
-                {peerIpInfo.ip} - {peerIpInfo.city}, {peerIpInfo.region}, {peerIpInfo.country_name}
+                {peerIpInfo.ip} - {peerIpInfo.city || '未知城市'}, {peerIpInfo.region || '未知地区'}, {peerIpInfo.country_name || '未知国家'}
+              </p>
+            </div>
+          ) : (
+            <div className="flex-1 p-2 rounded-md bg-gray-50 dark:bg-gray-700/30">
+              <h4 className="font-medium text-sm flex items-center opacity-50">
+                <FiMapPin className="mr-1" /> 等待对方连接
+              </h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                暂无对方位置信息
               </p>
             </div>
           )}

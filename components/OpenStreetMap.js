@@ -1,52 +1,22 @@
 import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
+import dynamic from 'next/dynamic';
 import { FiUsers } from 'react-icons/fi';
-import L from 'leaflet';
 
-// 修复Leaflet在Next.js中的图标路径问题
-useEffect(() => {
-  // 只在客户端运行
-  delete L.Icon.Default.prototype._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png',
-    iconUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png',
-    shadowUrl: 'https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png',
-  });
-}, []);
-
-// 地图视图控制组件
-function MapViewController({ center, zoom }) {
-  const map = useMap();
-  
-  useEffect(() => {
-    if (center && zoom) {
-      map.setView(center, zoom);
-    }
-  }, [center, zoom, map]);
-  
-  return null;
-}
-
-// 自定义图标
-const createCustomIcon = (color) => {
-  return L.divIcon({
-    className: 'custom-icon',
-    html: `<div style="background-color: ${color}; width: 2rem; height: 2rem; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">${color === '#4299e1' ? '👤' : '🧑‍💻'}</div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 32]
-  });
-};
+// 通过dynamic import确保leaflet仅在客户端加载
+const MapWithNoSSR = dynamic(() => import('./LeafletMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-60 w-full flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+      <p className="text-gray-500 dark:text-gray-400">加载地图中...</p>
+    </div>
+  ),
+});
 
 export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
   const [mapCenter, setMapCenter] = useState([0, 0]);
   const [mapZoom, setMapZoom] = useState(2);
-  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
-    // 确保组件挂载在客户端
-    setMapReady(true);
-    
     // 计算地图中心和缩放级别
     if (ipInfo?.latitude && ipInfo?.longitude && peerIpInfo?.latitude && peerIpInfo?.longitude) {
       const lat1 = parseFloat(ipInfo.latitude);
@@ -80,61 +50,23 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
     }
   }, [ipInfo, peerIpInfo]);
 
-  if (!mapReady || !ipInfo) {
+  // 如果没有IP信息，显示加载中
+  if (!ipInfo?.latitude || !ipInfo?.longitude) {
     return (
-      <div className="h-60 w-full flex items-center justify-center bg-gray-100 dark:bg-gray-800">
-        <p className="text-gray-500 dark:text-gray-400">加载地图中...</p>
+      <div className="h-60 w-full flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+        <p className="text-gray-500 dark:text-gray-400">等待IP信息...</p>
       </div>
     );
   }
 
   return (
-    <div className="h-60 w-full relative">
-      <MapContainer 
+    <div className="h-60 w-full relative rounded-lg overflow-hidden">
+      <MapWithNoSSR 
         center={mapCenter} 
         zoom={mapZoom} 
-        style={{ height: '100%', width: '100%', borderRadius: '0.5rem' }}
-        zoomControl={false}
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        
-        <MapViewController center={mapCenter} zoom={mapZoom} />
-        
-        {/* 显示自己的位置 */}
-        {ipInfo?.latitude && ipInfo?.longitude && (
-          <Marker 
-            position={[parseFloat(ipInfo.latitude), parseFloat(ipInfo.longitude)]} 
-            icon={createCustomIcon('#4299e1')}
-          >
-            <Popup>
-              <div>
-                <strong>您的位置</strong>
-                <p>{ipInfo.city}, {ipInfo.country_name}</p>
-                <p className="text-xs text-gray-500">IP: {ipInfo.ip}</p>
-              </div>
-            </Popup>
-          </Marker>
-        )}
-        
-        {/* 显示对方的位置 */}
-        {peerIpInfo?.latitude && peerIpInfo?.longitude && (
-          <Marker 
-            position={[parseFloat(peerIpInfo.latitude), parseFloat(peerIpInfo.longitude)]} 
-            icon={createCustomIcon('#48bb78')}
-          >
-            <Popup>
-              <div>
-                <strong>对方位置</strong>
-                <p>{peerIpInfo.city}, {peerIpInfo.country_name}</p>
-                <p className="text-xs text-gray-500">IP: {peerIpInfo.ip}</p>
-              </div>
-            </Popup>
-          </Marker>
-        )}
-      </MapContainer>
+        ipInfo={ipInfo}
+        peerIpInfo={peerIpInfo}
+      />
       
       {distance && (
         <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded shadow-sm backdrop-blur-sm z-[1000] text-xs text-center">

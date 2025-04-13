@@ -19,7 +19,16 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     setSelectedFiles(prev => [...prev, ...newFiles]);
   }, []);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
+  // 配置dropzone，禁用点击行为，我们将使用自己的点击处理器
+  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({ 
+    onDrop,
+    noClick: true, // 禁用点击事件，我们将使用自定义处理
+  });
+
+  // 主动触发文件选择器
+  const handleClickUpload = () => {
+    open(); // 打开文件选择器对话框
+  };
 
   const handleSendFile = async (fileObj) => {
     try {
@@ -72,10 +81,11 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         className={`drag-area border-dashed border-2 rounded-lg p-6 text-center cursor-pointer transition-colors
           ${isDragActive ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20' : 'border-gray-300 dark:border-gray-700'}`}
       >
-        <input {...getInputProps()} ref={fileInputRef} />
+        <input {...getInputProps()} />
         <motion.div
           whileHover={{ scale: 1.02 }}
           className="flex flex-col items-center justify-center py-4"
+          onClick={handleClickUpload} // 直接触发open()方法
         >
           <FiUpload className="text-4xl mb-3 text-indigo-500" />
           <p className="mb-2 text-gray-700 dark:text-gray-300">
@@ -84,6 +94,18 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
           <p className="text-xs text-gray-500 dark:text-gray-400">
             支持任何类型的文件
           </p>
+          
+          {/* 添加明确的上传按钮，确保可以触发文件选择 */}
+          <button 
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation(); // 阻止事件冒泡
+              open();
+            }}
+            className="mt-4 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
+          >
+            选择文件
+          </button>
         </motion.div>
       </div>
 
