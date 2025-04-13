@@ -565,16 +565,9 @@ export default function Room() {
       forceNew: true,                // 强制新连接
       autoConnect: true,             // 自动连接
       rejectUnauthorized: false,     // 允许自签名证书
-      polling: {
-        requestTimeout: 60000,       // 轮询请求超时时间 - 增加到60秒
-      },
-      // 关键参数: 延长轮询间隔
-      pollingDuration: 60000,        // 轮询持续时间 - 增加到60秒
-      httpCompression: true,         // 启用HTTP压缩
-      jsonp: false,                  // 禁用JSONP
-      withCredentials: false,        // 禁用跨域凭证
-      timestampRequests: true,       // 给请求添加时间戳防止缓存
-      rememberUpgrade: false,        // 不记住升级
+      query: {                       // 添加会话ID作为查询参数
+        sessionId: sessionIdRef.current
+      }
     };
     
     console.log('Socket.io 配置:', socketOptions);
@@ -595,6 +588,9 @@ export default function Room() {
       isSocketConnectedRef.current = true;
       setStatusMessage('已连接到服务器，正在加入房间...');
       
+      // 首先注册会话ID
+      socket.emit('register-session', sessionIdRef.current);
+      
       // 设置定期心跳检测
       const heartbeatInterval = setInterval(() => {
         if (socket.connected) {
@@ -609,7 +605,7 @@ export default function Room() {
             console.error('发送心跳时出错:', err);
           }
         }
-      }, 120000); // 从60秒增加到120秒，进一步减少网络请求
+      }, 120000); // 每2分钟发送一次心跳
       
       // 保存清理函数的引用
       socket.heartbeatInterval = heartbeatInterval;
