@@ -1,17 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
 
-// 修复Leaflet默认图标问题
-function fixLeafletIcons() {
-  delete L.Icon.Default.prototype._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-    iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png'
-  });
-}
+// 设置一个变量来存储Leaflet库的引用
+let L;
 
 // 用来使用动态中心点和缩放级别的组件
 function SetViewOnChange({ center, zoom }) {
@@ -26,8 +18,8 @@ function SetViewOnChange({ center, zoom }) {
   return null;
 }
 
-// 创建自定义图标
-function createIcon(color) {
+// 创建自定义图标 - 仅在客户端初始化
+function createIcon(color, L) {
   return new L.DivIcon({
     className: '',
     html: `
@@ -54,7 +46,16 @@ function createIcon(color) {
 export default function LeafletMap({ center, zoom, ipInfo, peerIpInfo }) {
   // 确保在客户端修复图标问题
   useEffect(() => {
-    fixLeafletIcons();
+    // 仅在客户端导入Leaflet
+    L = require('leaflet');
+    
+    // 修复Leaflet默认图标问题
+    delete L.Icon.Default.prototype._getIconUrl;
+    L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+      iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png'
+    });
   }, []);
   
   // 确保地图属性是有效的
@@ -63,6 +64,43 @@ export default function LeafletMap({ center, zoom, ipInfo, peerIpInfo }) {
     : [0, 0];
   
   const validZoom = zoom && !isNaN(zoom) ? zoom : 2;
+  
+  // 初始化时不包含markers，等L加载完后再渲染
+  const [markers, setMarkers] = useState([]);
+  
+  useEffect(() => {
+    if (!L) return;
+    
+    const newMarkers = [];
+    
+    // 添加自己的位置标记
+    if (ipInfo?.latitude && ipInfo?.longitude) {
+      newMarkers.push({
+        position: [parseFloat(ipInfo.latitude), parseFloat(ipInfo.longitude)],
+        icon: createIcon('#3b82f6', L),
+        popup: {
+          title: '您的位置',
+          location: `${ipInfo.city}, ${ipInfo.country_name}`,
+          ip: ipInfo.ip
+        }
+      });
+    }
+    
+    // 添加对方的位置标记
+    if (peerIpInfo?.latitude && peerIpInfo?.longitude) {
+      newMarkers.push({
+        position: [parseFloat(peerIpInfo.latitude), parseFloat(peerIpInfo.longitude)],
+        icon: createIcon('#10b981', L),
+        popup: {
+          title: '对方位置',
+          location: `${peerIpInfo.city}, ${peerIpInfo.country_name}`,
+          ip: peerIpInfo.ip
+        }
+      });
+    }
+    
+    setMarkers(newMarkers);
+  }, [ipInfo, peerIpInfo, L]);
   
   return (
     <MapContainer 
@@ -80,37 +118,21 @@ export default function LeafletMap({ center, zoom, ipInfo, peerIpInfo }) {
       
       <SetViewOnChange center={validCenter} zoom={validZoom} />
       
-      {/* 显示自己的位置标记 */}
-      {ipInfo?.latitude && ipInfo?.longitude && (
+      {markers.map((marker, index) => (
         <Marker 
-          position={[parseFloat(ipInfo.latitude), parseFloat(ipInfo.longitude)]}
-          icon={createIcon('#3b82f6')}
+          key={index}
+          position={marker.position}
+          icon={marker.icon}
         >
           <Popup>
             <div>
-              <div className="font-bold">您的位置</div>
-              <div>{ipInfo.city}, {ipInfo.country_name}</div>
-              <div className="text-xs text-gray-500 mt-1">IP: {ipInfo.ip}</div>
+              <div className="font-bold">{marker.popup.title}</div>
+              <div>{marker.popup.location}</div>
+              <div className="text-xs text-gray-500 mt-1">IP: {marker.popup.ip}</div>
             </div>
           </Popup>
         </Marker>
-      )}
-      
-      {/* 显示对方的位置标记 */}
-      {peerIpInfo?.latitude && peerIpInfo?.longitude && (
-        <Marker 
-          position={[parseFloat(peerIpInfo.latitude), parseFloat(peerIpInfo.longitude)]}
-          icon={createIcon('#10b981')}
-        >
-          <Popup>
-            <div>
-              <div className="font-bold">对方位置</div>
-              <div>{peerIpInfo.city}, {peerIpInfo.country_name}</div>
-              <div className="text-xs text-gray-500 mt-1">IP: {peerIpInfo.ip}</div>
-            </div>
-          </Popup>
-        </Marker>
-      )}
+      ))}
     </MapContainer>
   );
 }

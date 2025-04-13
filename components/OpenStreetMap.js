@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { FiUsers } from 'react-icons/fi';
+import { isServer } from '../lib/nossr';
 
-// 通过dynamic import确保leaflet仅在客户端加载
+// 动态导入时明确指定不进行SSR
 const MapWithNoSSR = dynamic(() => import('./LeafletMap'), {
   ssr: false,
   loading: () => (
@@ -15,8 +16,16 @@ const MapWithNoSSR = dynamic(() => import('./LeafletMap'), {
 export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
   const [mapCenter, setMapCenter] = useState([0, 0]);
   const [mapZoom, setMapZoom] = useState(2);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // 确保只在客户端运行
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
+    if (!isMounted) return;
+    
     // 计算地图中心和缩放级别
     if (ipInfo?.latitude && ipInfo?.longitude && peerIpInfo?.latitude && peerIpInfo?.longitude) {
       // 两点之间的地图设置
@@ -57,7 +66,16 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
       setMapCenter([parseFloat(ipInfo.latitude), parseFloat(ipInfo.longitude)]);
       setMapZoom(10); // 单点显示时用更高的缩放级别
     }
-  }, [ipInfo, peerIpInfo]);
+  }, [ipInfo, peerIpInfo, isMounted]);
+
+  // 如果在服务器端，不渲染任何内容
+  if (isServer() || !isMounted) {
+    return (
+      <div className="h-60 w-full flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+        <p className="text-gray-500 dark:text-gray-400">地图将在客户端加载...</p>
+      </div>
+    );
+  }
 
   // 如果没有IP信息，显示加载中
   if (!ipInfo?.latitude || !ipInfo?.longitude) {

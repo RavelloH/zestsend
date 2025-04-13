@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
-import dynamic from 'next/dynamic';
 import { FiUsers } from 'react-icons/fi';
+import dynamic from 'next/dynamic';
+import 'leaflet/dist/leaflet.css';
 
 // 通过dynamic import确保OpenStreetMap仅在客户端加载
 const OSMap = dynamic(() => import('./OpenStreetMap'), {
@@ -41,8 +40,8 @@ export default function IPMap({ ipInfo, peerIpInfo }) {
         const dLat = (lat2 - lat1) * (Math.PI/180);
         const dLon = (lon2 - lon1) * (Math.PI/180);
         const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                  Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) * 
-                  Math.sin(dLon/2) * Math.sin(dLon/2);
+                Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
         const distance = R * c;
         
