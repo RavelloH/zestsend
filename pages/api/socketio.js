@@ -35,7 +35,9 @@ const redisKeys = {
   roomUsers: (roomId) => `zstsess:room:${roomId}:users`,
   roomInitiator: (roomId) => `zstsess:room:${roomId}:initiator`,
   // Socket.IO 原生键名
-  socketioSession: (sid) => `socketio:${sid}`
+  socketioSession: (sid) => `socketio:${sid}`,
+  // Socket.IO Engine会话数据 (添加新的键类型)
+  engineSession: (sid) => `zstsess:engine:${sid}`
 };
 
 export default async function SocketHandler(req, res) {
@@ -348,10 +350,39 @@ export default async function SocketHandler(req, res) {
       async cleanupSocketIOSession(sid) {
         try {
           await pubClient.del(redisKeys.socketioSession(sid));
+          await pubClient.del(redisKeys.engineSession(sid));
           return true;
         } catch (err) {
           debugLog('清理Socket.IO会话失败', { error: err.message });
           return false;
+        }
+      },
+      
+      // 新增: 保存Socket.IO Engine会话
+      async saveEngineSession(sid, data) {
+        try {
+          await pubClient.set(
+            redisKeys.engineSession(sid),
+            JSON.stringify(data),
+            'EX',
+            SESSION_EXPIRY
+          );
+          debugLog(`保存Engine会话数据: ${sid}`);
+          return true;
+        } catch (err) {
+          debugLog('保存Engine会话数据失败', { error: err.message });
+          return false;
+        }
+      },
+      
+      // 新增: 获取Socket.IO Engine会话
+      async getEngineSession(sid) {
+        try {
+          const data = await pubClient.get(redisKeys.engineSession(sid));
+          return data ? JSON.parse(data) : null;
+        } catch (err) {
+          debugLog('获取Engine会话数据失败', { error: err.message });
+          return null;
         }
       }
     };
@@ -442,8 +473,15 @@ export default async function SocketHandler(req, res) {
             
             // 在Redis中查找此会话是否有记录
             try {
-              // 首先清理无效的Socket.IO会话
-              await redisSession.cleanupSocketIOSession(sid);
+              // 首先尝试查找是否有Engine会话信息
+              const engineSession = await redisSession.getEngineSession(sid);
+              if (engineSession) {
+                debugLog(`找到Engine会话数据: ${sid}`);
+                // 我们发现了旧会话，但无法直接恢复，清理它
+                await redisSession.cleanupSocketIOSession(sid);
+              } else {
+                debugLog(`未找到Engine会话数据: ${sid}`);
+              }
               
               // 检查URL中是否有sessionId和roomId
               const clientSessionId = url.searchParams.get('sessionId');
@@ -455,6 +493,25 @@ export default async function SocketHandler(req, res) {
                 const existingSocketId = await redisSession.getSocketIdBySessionId(clientSessionId);
                 if (existingSocketId) {
                   debugLog(`找到关联的Socket ID: ${existingSocketId}`);
+                  
+                  // 建立一个新会话创建时间点的记录，帮助客户端决策
+                  const sessionErrorInfo = {
+                    sid: sid,
+                    clientSessionId: clientSessionId,
+                    roomId: roomId,
+                    time: Date.now(),
+                    oldSocketId: existingSocketId,
+                    error: 'session_id_unknown'
+                  };
+                  
+                  // 保存会话错误信息，以便客户端可以查询
+                  await pubClient.set(
+                    `zstsess:error:${clientSessionId}`, 
+                    JSON.stringify(sessionErrorInfo),
+                    'EX',
+                    300 // 5分钟过期
+                  );
+                  
                   // 清理旧的Socket会话
                   await pubClient.del(redisKeys.socketSession(existingSocketId));
                   debugLog(`已清理旧的Socket会话: ${existingSocketId}`);
@@ -474,6 +531,49 @@ export default async function SocketHandler(req, res) {
         headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
         headers['Pragma'] = 'no-cache';
         headers['Expires'] = '0';
+      });
+
+      // 监听Engine初始握手
+      io.engine.on('initial_headers', (headers, req) => {
+        // 用于调试的唯一标识符
+        headers['X-Connection-Id'] = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 7);
+      });
+
+      // 监听Socket.IO连接升级，记录有用的调试信息
+      io.engine.on('headers', (headers, req) => {
+        const url = new URL(req.url, 'http://localhost');
+        const clientSessionId = url.searchParams.get('sessionId');
+        
+        if (clientSessionId) {
+          // 在头信息中包含会话ID，帮助调试
+          headers['X-Client-Session'] = clientSessionId.substring(0, 8);
+        }
+      });
+
+      // 添加新的会话拦截逻辑
+      io.engine.on('connection', async (socket) => {
+        try {
+          const handshake = socket.request;
+          if (handshake && handshake._query) {
+            const clientSessionId = handshake._query.sessionId;
+            const roomId = handshake._query.roomId;
+            
+            // 保存Engine会话信息
+            if (clientSessionId && socket.id && redisSession) {
+              // 记录Engine会话数据，用于恢复
+              const engineData = {
+                id: socket.id,
+                clientSessionId: clientSessionId,
+                roomId: roomId,
+                time: Date.now()
+              };
+              
+              await redisSession.saveEngineSession(socket.id, engineData);
+            }
+          }
+        } catch (error) {
+          debugLog('处理Engine连接时出错', { error: error.message });
+        }
       });
 
       // 添加更多的服务器事件监听器
@@ -555,6 +655,36 @@ export default async function SocketHandler(req, res) {
             'x-forwarded-for': socket.handshake.headers['x-forwarded-for'] || 'none'
           }
         });
+
+        // 添加新方法: 检查会话错误状态
+        socket.on('check-session-error', async (sessionData) => {
+          const { sessionId } = sessionData || {};
+          
+          if (!sessionId || !pubClient) {
+            socket.emit('session-error-status', { found: false });
+            return;
+          }
+          
+          try {
+            const errorData = await pubClient.get(`zstsess:error:${sessionId}`);
+            if (errorData) {
+              // 找到错误信息，发送给客户端
+              const parsedData = JSON.parse(errorData);
+              socket.emit('session-error-status', { 
+                found: true, 
+                data: parsedData 
+              });
+              
+              // 清除错误信息，防止重复处理
+              await pubClient.del(`zstsess:error:${sessionId}`);
+            } else {
+              socket.emit('session-error-status', { found: false });
+            }
+          } catch (err) {
+            debugLog('检查会话错误状态失败', { error: err.message });
+            socket.emit('session-error-status', { found: false, error: err.message });
+          }
+        });
         
         // 如果查询参数中有sessionId和roomId，尝试立即恢复会话
         if (clientSessionId && roomId && redisSession) {
@@ -632,9 +762,36 @@ export default async function SocketHandler(req, res) {
           
           // 存储到Redis
           if (redisSession) {
+            // 首先检查这个会话ID是否已经有关联的socketId
+            const existingSocketId = await redisSession.getSocketIdBySessionId(sessionId);
+            if (existingSocketId && existingSocketId !== socket.id) {
+              debugLog(`会话ID已关联到其他Socket: ${existingSocketId}, 更新为当前Socket: ${socket.id}`);
+            }
+            
+            // 保存新的映射关系
             await redisSession.storeSocketSession(socket.id, sessionId);
             debugLog(`会话ID已存储到Redis: ${sessionId}`);
+            
+            // 检查是否有会话错误记录
+            const errorData = await pubClient.get(`zstsess:error:${sessionId}`);
+            if (errorData) {
+              debugLog(`发现会话错误记录: ${sessionId}`);
+              const parsedData = JSON.parse(errorData);
+              
+              // 通知客户端有会话错误
+              socket.emit('session-error-detected', parsedData);
+              
+              // 清除错误记录
+              await pubClient.del(`zstsess:error:${sessionId}`);
+            }
           }
+          
+          // 回复客户端，确认会话已注册
+          socket.emit('session-registered', { 
+            success: true, 
+            socketId: socket.id, 
+            timestamp: Date.now() 
+          });
         });
         
         // 客户端加入房间

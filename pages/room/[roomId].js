@@ -567,7 +567,8 @@ export default function Room() {
       rejectUnauthorized: false,     // 允许自签名证书
       query: {                       // 添加会话ID作为查询参数
         sessionId: sessionIdRef.current,
-        roomId: roomId               // 同时传递房间ID
+        roomId: roomId,              // 同时传递房间ID
+        _t: Date.now()               // 添加时间戳防止缓存问题
       }
     };
     
@@ -603,6 +604,9 @@ export default function Room() {
       console.log('信令服务器已连接, socket ID:', socket.id, '传输类型:', socket.io.engine.transport.name);
       isSocketConnectedRef.current = true;
       setStatusMessage('已连接到服务器，正在加入房间...');
+      
+      // 检查是否有会话错误
+      socket.emit('check-session-error', { sessionId: sessionIdRef.current });
       
       // 首先注册会话ID
       socket.emit('register-session', sessionIdRef.current);
@@ -651,6 +655,38 @@ export default function Room() {
         });
         pendingCandidatesRef.current = [];
       }
+    });
+    
+    // 监听会话注册响应
+    socket.on('session-registered', (data) => {
+      console.log('会话注册确认:', data);
+      
+      // 可以在这里执行一些会话成功注册后的逻辑
+    });
+    
+    // 监听会话错误检查响应
+    socket.on('session-error-status', (data) => {
+      console.log('会话错误状态:', data);
+      
+      if (data.found) {
+        console.log('发现会话错误记录, 需要重新连接');
+        
+        // 可以选择自动处理错误
+        if (data.data && data.data.error === 'session_id_unknown') {
+          // 在UI中显示错误，或者自动重新连接
+          setErrorMessage(`检测到会话错误，可能需要重置连接。错误类型: ${data.data.error}`);
+        }
+      }
+    });
+    
+    // 监听会话错误通知
+    socket.on('session-error-detected', (data) => {
+      console.log('服务器检测到会话错误:', data);
+      
+      // 提示用户会话有问题
+      setErrorMessage(`检测到会话问题: ${data.error}。请尝试重置会话或重新连接。`);
+      
+      // 您可以添加自动恢复逻辑，或者让用户手动操作
     });
     
     // 房间状态事件 - 简化以确保一致处理
@@ -791,7 +827,8 @@ export default function Room() {
         time: new Date().toISOString(),
         sessionId: sessionIdRef.current,
         roomId: roomId,
-        attempts: socket.io.reconnectionAttempts
+        attempts: socket.io.reconnectionAttempts,
+        opts: socket.io.opts
       };
       console.log('连接错误详情:', errorDetails);
       
@@ -813,15 +850,10 @@ export default function Room() {
         sessionIdRef.current = newSessionId;
         localStorage.setItem('zestsend_session_id', newSessionId);
         
-        // 更新错误消息
-        setErrorMessage(`会话ID错误，已生成新ID: ${newSessionId.substring(0,8)}。点击"强制连接"重试。`);
+        // 更新错误消息，提供更具体的指导
+        setErrorMessage(`会话ID错误，已生成新ID: ${newSessionId.substring(0,8)}。请点击"重置会话"按钮重试连接。`);
         
-        // 重置连接状态
-        socket.io.opts.query = {
-          sessionId: newSessionId,
-          roomId: roomId,
-          reset: 'true' // 添加重置标记
-        };
+        // 不要自动重连，而是让用户手动操作，这样更可控
       }
       
       // 尝试使用不同的传输方式
@@ -942,6 +974,11 @@ export default function Room() {
     // 重置计数器
     connectAttemptsRef.current = 0;
     
+    // 清除所有缓存的信息
+    remoteSessionIdRef.current = null; // 重要：清除远程会话ID缓存
+    pendingCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
+    
     // 更新状态
     setConnectionStatus('waiting');
     setStatusMessage('正在重置连接...');
@@ -969,7 +1006,8 @@ export default function Room() {
         query: {
           sessionId: newSessionId,
           roomId: roomId,
-          reset: 'true'
+          reset: 'true',
+          _t: Date.now() // 添加时间戳防止缓存问题
         }
       });
       
@@ -983,6 +1021,21 @@ export default function Room() {
         
         socket.emit('register-session', newSessionId);
         socket.emit('join-room', roomId, newSessionId);
+        
+        // 设置新的心跳检测
+        const heartbeatInterval = setInterval(() => {
+          if (socket.connected) {
+            socket.emit('heartbeat');
+          }
+        }, 30000);
+        
+        socket.heartbeatInterval = heartbeatInterval;
+      });
+      
+      // 添加错误处理器
+      socket.on('connect_error', (err) => {
+        console.error('重连时出错:', err);
+        setErrorMessage(`重连时出错: ${err.message}`);
       });
       
       // 记录成功信息
@@ -1168,7 +1221,7 @@ export default function Room() {
             </div>
             
             {/* 连接操作按钮 */}
-            <div className="flex flex-col sm:flex-row justify-center gap-3 mt-6">
+            <div className="flex flex-col sm:flex-row justify中心 gap-3 mt-6">
               <button 
                 onClick={testConnection}
                 className="btn-secondary"
@@ -1241,14 +1294,14 @@ export default function Room() {
                     <span className="font-mono">{sessionIdRef.current?.substring(0, 8)}</span>
                   </div>
                   <div className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">Socket ID:</span>
+                    <span className="font-mono">{socketRef.current?.id?.substring(0, 8) || '未连接'}</span>
+                  </div>
+                  <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">对方会话:</span>
                     <span className="font-mono">
                       {remoteSessionIdRef.current?.substring(0, 8) || '未知'}
                     </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">角色:</span>
-                    <span className="font-medium">{isInitiator ? '发起方' : '接收方'}</span>
                   </div>
                   {peerRef.current && (
                     <>
