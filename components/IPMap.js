@@ -1,148 +1,94 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, ZoomControl, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 import dynamic from 'next/dynamic';
-import { motion } from 'framer-motion';
-import { FiMapPin, FiUsers, FiMap } from 'react-icons/fi';
+import { FiUsers } from 'react-icons/fi';
 
-// 动态导入地图，防止服务器端渲染错误
-const OpenStreetMapComponent = dynamic(() => import('./OpenStreetMap'), {
+// 通过dynamic import确保OpenStreetMap仅在客户端加载
+const OSMap = dynamic(() => import('./OpenStreetMap'), {
   ssr: false,
   loading: () => (
-    <div className="h-60 w-full flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-t-lg">
-      <div className="text-center">
-        <FiMap className="mx-auto mb-2 text-3xl text-gray-400" />
-        <p className="text-gray-500 dark:text-gray-400">加载地图中...</p>
-      </div>
+    <div className="h-60 w-full flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
+      <p className="text-gray-500 dark:text-gray-400">加载地图中...</p>
     </div>
   ),
 });
 
 export default function IPMap({ ipInfo, peerIpInfo }) {
   const [distance, setDistance] = useState(null);
-  const [mapError, setMapError] = useState(false);
+  const [error, setError] = useState(null);
 
-  // 计算两点之间的距离（使用哈弗辛公式）
-  const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371; // 地球半径（千米）
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-      Math.sin(dLon/2) * Math.sin(dLon/2); 
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
-    const distance = R * c; // 距离（千米）
-    return distance;
-  };
-
+  // 计算两点之间的距离（使用Haversine公式）
   useEffect(() => {
-    // 如果有两个IP地址，计算距离
-    if (ipInfo?.latitude && ipInfo?.longitude && peerIpInfo?.latitude && peerIpInfo?.longitude) {
-      try {
-        const lat1 = parseFloat(ipInfo.latitude);
-        const lng1 = parseFloat(ipInfo.longitude);
-        const lat2 = parseFloat(peerIpInfo.latitude);
-        const lng2 = parseFloat(peerIpInfo.longitude);
+    try {
+      if (ipInfo?.latitude && ipInfo?.longitude && 
+          peerIpInfo?.latitude && peerIpInfo?.longitude && 
+          // 关键检查：确保对方IP不等于自己的IP
+          peerIpInfo.ip !== ipInfo.ip) {
         
-        if (!isNaN(lat1) && !isNaN(lng1) && !isNaN(lat2) && !isNaN(lng2)) {
-          // 计算两点间的距离
-          const calculatedDistance = calculateDistance(lat1, lng1, lat2, lng2);
-          setDistance(calculatedDistance);
-        } else {
+        const lat1 = parseFloat(ipInfo.latitude);
+        const lon1 = parseFloat(ipInfo.longitude);
+        const lat2 = parseFloat(peerIpInfo.latitude);
+        const lon2 = parseFloat(peerIpInfo.longitude);
+        
+        // 如果坐标完全相同，不显示距离
+        if (lat1 === lat2 && lon1 === lon2) {
           setDistance(null);
+          return;
         }
-      } catch (error) {
-        console.error("计算距离出错:", error);
+        
+        const R = 6371; // 地球半径（公里）
+        const dLat = (lat2 - lat1) * (Math.PI/180);
+        const dLon = (lon2 - lon1) * (Math.PI/180);
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * (Math.PI/180)) * Math.cos(lat2 * (Math.PI/180)) * 
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const distance = R * c;
+        
+        setDistance(distance);
+      } else {
         setDistance(null);
       }
-    } else {
+    } catch (err) {
+      console.error('Error calculating distance:', err);
+      setError(err.message);
       setDistance(null);
     }
   }, [ipInfo, peerIpInfo]);
 
-  // 调试输出，检查IP数据
-  useEffect(() => {
-    console.log("本地IP信息:", ipInfo);
-    console.log("对方IP信息:", peerIpInfo);
-  }, [ipInfo, peerIpInfo]);
+  const handleMapError = (err) => {
+    console.error('Map error:', err);
+    setError(err.message);
+  };
 
-  if (!ipInfo) {
-    return (
-      <div className="rounded-lg bg-gray-100 dark:bg-gray-800 p-4 h-60 flex items-center justify-center">
-        <p className="text-gray-500 dark:text-gray-400">加载IP信息中...</p>
-      </div>
-    );
-  }
+  // 检查是否应该显示对方的位置
+  const shouldShowPeerLocation = 
+    peerIpInfo && 
+    ipInfo && 
+    peerIpInfo.ip !== ipInfo.ip && // 确保不是同一个IP
+    peerIpInfo.latitude && 
+    peerIpInfo.longitude;
+
+  // 只传递有效的对方IP信息给地图组件
+  const validPeerIpInfo = shouldShowPeerLocation ? peerIpInfo : null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className="rounded-lg overflow-hidden shadow-md"
-    >
-      {mapError ? (
-        <div className="h-60 w-full flex items-center justify-center bg-gray-100 dark:bg-gray-800">
-          <div className="text-center p-4">
-            <FiMap className="mx-auto mb-2 text-3xl text-gray-400" />
-            <p className="text-gray-500 dark:text-gray-400 mb-2">地图加载失败</p>
-            <button 
-              onClick={() => setMapError(false)} 
-              className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
-            >
-              重试加载
-            </button>
-          </div>
+    <div>
+      {error ? (
+        <div className="h-60 w-full flex items-center justify-center bg-red-50 dark:bg-red-900/20 rounded-lg">
+          <p className="text-red-500 dark:text-red-400 text-center px-4">
+            地图加载错误: {error}
+          </p>
         </div>
       ) : (
-        <OpenStreetMapComponent 
+        <OSMap 
           ipInfo={ipInfo} 
-          peerIpInfo={peerIpInfo} 
-          distance={distance}
-          onError={() => setMapError(true)}
+          peerIpInfo={validPeerIpInfo}  // 只传递有效的对方IP信息
+          distance={distance} 
+          onError={handleMapError}
         />
       )}
-      
-      <div className="bg-white dark:bg-gray-800 p-4 border-t border-gray-200 dark:border-gray-700">
-        <div className="flex flex-col sm:flex-row sm:space-x-4 space-y-2 sm:space-y-0">
-          <div className="flex-1 p-2 rounded-md bg-blue-50 dark:bg-blue-900/30">
-            <h4 className="font-medium text-sm flex items-center">
-              <FiMapPin className="mr-1" /> 您的位置
-            </h4>
-            <p className="text-xs text-gray-600 dark:text-gray-300">
-              {ipInfo.ip} - {ipInfo.city || '未知城市'}, {ipInfo.region || '未知地区'}, {ipInfo.country_name || '未知国家'}
-            </p>
-          </div>
-          
-          {peerIpInfo ? (
-            <div className="flex-1 p-2 rounded-md bg-green-50 dark:bg-green-900/30">
-              <h4 className="font-medium text-sm flex items-center">
-                <FiMapPin className="mr-1" /> 对方位置
-              </h4>
-              <p className="text-xs text-gray-600 dark:text-gray-300">
-                {peerIpInfo.ip} - {peerIpInfo.city || '未知城市'}, {peerIpInfo.region || '未知地区'}, {peerIpInfo.country_name || '未知国家'}
-              </p>
-            </div>
-          ) : (
-            <div className="flex-1 p-2 rounded-md bg-gray-50 dark:bg-gray-700/30">
-              <h4 className="font-medium text-sm flex items-center opacity-50">
-                <FiMapPin className="mr-1" /> 等待对方连接
-              </h4>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                暂无对方位置信息
-              </p>
-            </div>
-          )}
-        </div>
-        
-        {distance && (
-          <div className="mt-3 text-center">
-            <p className="text-sm font-medium flex items-center justify-center">
-              <FiUsers className="mr-1" />
-              连接距离: <span className="text-indigo-600 dark:text-indigo-400 ml-1">{distance.toFixed(0)} 公里</span>
-            </p>
-          </div>
-        )}
-      </div>
-    </motion.div>
+    </div>
   );
 }

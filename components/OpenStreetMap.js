@@ -19,10 +19,19 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
   useEffect(() => {
     // 计算地图中心和缩放级别
     if (ipInfo?.latitude && ipInfo?.longitude && peerIpInfo?.latitude && peerIpInfo?.longitude) {
+      // 两点之间的地图设置
       const lat1 = parseFloat(ipInfo.latitude);
       const lng1 = parseFloat(ipInfo.longitude);
       const lat2 = parseFloat(peerIpInfo.latitude);
       const lng2 = parseFloat(peerIpInfo.longitude);
+      
+      // 检查坐标是否相同
+      if (lat1 === lat2 && lng1 === lng2) {
+        // 如果坐标相同，就只聚焦一个点
+        setMapCenter([lat1, lng1]);
+        setMapZoom(10);
+        return;
+      }
       
       // 计算中心点
       const centerLat = (lat1 + lat2) / 2;
@@ -46,7 +55,7 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
     // 如果只有自己的IP信息
     else if (ipInfo?.latitude && ipInfo?.longitude) {
       setMapCenter([parseFloat(ipInfo.latitude), parseFloat(ipInfo.longitude)]);
-      setMapZoom(10);
+      setMapZoom(10); // 单点显示时用更高的缩放级别
     }
   }, [ipInfo, peerIpInfo]);
 

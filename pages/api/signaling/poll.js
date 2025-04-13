@@ -30,8 +30,14 @@ export default async function handler(req, res) {
     let connectionPriority = 'normal';
     
     if (room.peers && room.peers.length > 0) {
-      // 严格筛选：必须不是自己的peerId
-      const otherPeers = room.peers.filter(p => p.id !== peerId && p.id !== undefined && p.id !== null);
+      // 严格筛选：必须不是自己的peerId，并且必须不是同一个IP地址
+      const selfIP = selfPeer?.ip;
+      const otherPeers = room.peers.filter(p => 
+        p.id !== peerId && 
+        p.id !== undefined && 
+        p.id !== null &&
+        p.ip !== selfIP  // 增加IP检查，确保不是同一个用户的多个标签页
+      );
       
       if (otherPeers.length > 0) {
         // 只取第一个其他对等方，支持1对1通信
@@ -55,18 +61,22 @@ export default async function handler(req, res) {
       }
     }
     
-    // 尝试获取远程Peer的IP信息
+    // 尝试获取远程Peer的IP信息，确保不是自己的IP
     let ipInfo = null;
     let peerIPInfo = null;
     
     // 获取远程节点的IP信息
-    if (remotePeerId) {
+    if (remotePeerId && selfPeer?.ip) {
       try {
-        // console.log(`尝试获取远程IP信息，roomId=${roomId}, remotePeerId=${remotePeerId}`);
         ipInfo = await getIPInfo(roomId, remotePeerId);
-        // console.log(`获取到的远程IP信息: ${ipInfo ? JSON.stringify(ipInfo) : 'null'}`);
+        
+        // 额外验证：确保返回的IP与自己的不同
+        if (ipInfo && ipInfo.ip === selfPeer.ip) {
+          console.warn(`警告: 检测到IP相同的对等方，忽略IP信息. roomId=${roomId}`);
+          ipInfo = null;
+        }
       } catch (error) {
-        // console.error(`获取远程IP信息出错: ${error.message}`);
+        console.error(`获取远程IP信息出错: ${error.message}`);
       }
     }
     

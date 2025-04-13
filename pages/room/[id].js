@@ -324,11 +324,17 @@ export default function Room() {
             setRemotePeerId(data.remotePeerId);
           }
           
-          // 更新对方IP信息 - 优先使用ipInfo，如果为null则尝试使用peerIPInfo
-          if (data.ipInfo && JSON.stringify(data.ipInfo) !== JSON.stringify(peerIpInfo)) {
+          // 更新对方IP信息 - 添加额外的验证逻辑
+          if (data.ipInfo && 
+              JSON.stringify(data.ipInfo) !== JSON.stringify(peerIpInfo) && 
+              (ipInfo?.ip !== data.ipInfo.ip)) { // 确保不是自己的IP
+            
             setPeerIpInfo(data.ipInfo);
             console.log("更新对方IP信息:", data.ipInfo);
-          } else if (data.peerIPInfo && JSON.stringify(data.peerIPInfo) !== JSON.stringify(peerIpInfo)) {
+          } else if (data.peerIPInfo && 
+                     JSON.stringify(data.peerIPInfo) !== JSON.stringify(peerIpInfo) &&
+                     (ipInfo?.ip !== data.peerIPInfo.ip)) { // 确保不是自己的IP
+            
             // 使用对方返回的自己的IP信息作为对方的IP信息
             setPeerIpInfo(data.peerIPInfo);
             console.log("使用远程自身IP信息:", data.peerIPInfo);
