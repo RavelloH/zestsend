@@ -208,10 +208,25 @@ export default function Room() {
     addLog(`开始轮询检查对方连接状态...`);
     setHttpPollingActive(true);
     
+    // 添加一个引用变量跟踪内部连接状态，确保轮询内部立即感知连接状态变化
+    const connectionState = { isConnected: connected };
+    
+    // 添加一个变量来防止日志重复
+    const logState = {
+      lastRemotePeerId: null,
+      lastConnectionAttempt: 0,
+      connectionCheckLogShown: false
+    };
+    
     const interval = setInterval(async () => {
+      // 更新内部连接状态引用以获取最新状态
+      connectionState.isConnected = connected;
+      
       // 如果已经连接，减少轮询频率
-      if (connected) {
+      if (connectionState.isConnected) {
         clearInterval(interval);
+        addLog(`已连接，切换到低频轮询模式`, 'info');
+        
         // 使用更低频率的轮询保持IP信息更新
         const slowInterval = setInterval(async () => {
           try {
@@ -238,47 +253,101 @@ export default function Room() {
         if (res.ok && data.remotePeerId) {
           // 严格检查：确保不是自己
           if (data.remotePeerId === peerId) {
-            addLog(`检测到尝试连接到自己(${peerId})，已忽略此连接请求`, 'warn');
+            // 只在第一次出现自连接时显示警告，避免重复日志
+            if (!logState.selfConnectionWarningShown) {
+              addLog(`检测到尝试连接到自己(${peerId})，已忽略此连接请求`, 'warn');
+              logState.selfConnectionWarningShown = true;
+            }
             return;
           }
           
-          if (data.remotePeerId !== remotePeerId) {
-            addLog(`发现对方 Peer ID: ${data.remotePeerId}`);
-            setRemotePeerId(data.remotePeerId);
-            
-            // 修改连接逻辑：不再等待对方连接，双方都尝试主动连接
-            // 会自动处理可能的连接冲突
-            if (p2pConnection && !connected) {
-              // 短暂延迟以避免完全同时连接
-              const delayTime = data.connectionPriority === 'high' ? 0 : 1000;
-              
-              setTimeout(() => {
-                if (!connected) { // 再次检查以避免在延迟期间已连接
-                  addLog(`尝试连接到对方...`);
-                  p2pConnection.connect(data.remotePeerId)
-                    .then(() => {
-                      // 连接成功，不需要额外处理
-                    })
-                    .catch(err => {
-                      // 如果是"已存在连接"错误，可以忽略
-                      if (!err.message.includes('already connected') && 
-                          !err.message.includes('Connection already exists')) {
-                        addLog(`连接尝试失败: ${err.message}`, 'error');
-                      }
-                    });
-                }
-              }, delayTime);
+          // 每次处理前再次检查连接状态
+          if (connectionState.isConnected) {
+            // 如果已连接，只更新远程ID和IP信息，不尝试重新连接
+            // 同时不产生任何日志
+            if (data.remotePeerId !== remotePeerId) {
+              setRemotePeerId(data.remotePeerId);
             }
             
-            // 获取对方IP信息
             if (data.ipInfo) {
               setPeerIpInfo(data.ipInfo);
             }
+            return;
+          }
+          
+          // 检查是否是新的远程对等方ID - 只有在变化时才输出日志
+          const isNewRemotePeer = data.remotePeerId !== logState.lastRemotePeerId;
+          if (isNewRemotePeer) {
+            addLog(`发现对方 Peer ID: ${data.remotePeerId}`);
+            setRemotePeerId(data.remotePeerId);
+            logState.lastRemotePeerId = data.remotePeerId;
+          }
+          
+          // 关键修改：严格检查连接状态，禁止在已连接状态下尝试连接
+          if (p2pConnection && !connectionState.isConnected && !connected) {
+            // 检查p2p连接对象的连接状态
+            const isAlreadyConnected = p2pConnection.isConnected && p2pConnection.isConnected();
+            
+            if (isAlreadyConnected) {
+              // 只在首次检测到活跃连接时输出日志，避免重复日志
+              if (!logState.connectionCheckLogShown) {
+                addLog(`检测到已有活跃连接，跳过连接尝试`, 'info');
+                logState.connectionCheckLogShown = true;
+              }
+              return;
+            }
+            
+            // 限制连接尝试的频率
+            const now = Date.now();
+            const timeSinceLastAttempt = now - logState.lastConnectionAttempt;
+            const minAttemptInterval = 5000; // 5秒内不重复尝试连接
+            
+            if (timeSinceLastAttempt < minAttemptInterval) {
+              return; // 静默跳过，不记录日志
+            }
+            
+            const delayTime = data.connectionPriority === 'high' ? 0 : 1000;
+            
+            setTimeout(() => {
+              // 再次检查连接状态，以防在延迟期间已连接
+              if (!connected && !connectionState.isConnected) {
+                if (p2pConnection.isConnected && p2pConnection.isConnected()) {
+                  return; // 已连接，静默返回
+                }
+                
+                addLog(`尝试连接到对方...`);
+                logState.lastConnectionAttempt = Date.now();
+                
+                p2pConnection.connect(data.remotePeerId)
+                  .then(() => {
+                    // 成功后立即更新内部引用状态，防止其他轮询尝试重复连接
+                    connectionState.isConnected = true;
+                    logState.connectionCheckLogShown = false; // 重置标志，允许下一次连接时显示日志
+                  })
+                  .catch(err => {
+                    // 如果是"已存在连接"错误，可以忽略
+                    if (!err.message.includes('already connected') && 
+                        !err.message.includes('Connection already exists')) {
+                      addLog(`连接尝试失败: ${err.message}`, 'error');
+                    }
+                  });
+              }
+            }, delayTime);
+          }
+          
+          // 获取对方IP信息
+          if (data.ipInfo) {
+            setPeerIpInfo(data.ipInfo);
           }
         }
       } catch (error) {
         console.error('Polling error:', error);
-        addLog(`轮询出错: ${error.message}`, 'warn');
+        // 限制错误日志的频率
+        const now = Date.now();
+        if (!logState.lastErrorTime || now - logState.lastErrorTime > 10000) {
+          addLog(`轮询出错: ${error.message}`, 'warn');
+          logState.lastErrorTime = now;
+        }
       }
     }, 3000);
     
@@ -316,6 +385,7 @@ export default function Room() {
   // 处理Peer连接
   const handlePeerConnected = (conn) => {
     addLog(`已与对方建立连接!`, 'success');
+    // 立即设置连接状态，防止轮询继续尝试连接
     setConnected(true);
     setP2pConnectionActive(true);
     setDataChannelActive(true);
@@ -396,6 +466,13 @@ export default function Room() {
     setVideoStream(null);
     setP2pConnectionActive(false);
     setDataChannelActive(false);
+    
+    // 添加：当连接断开时，重新启动轮询以尝试重新连接
+    // 确保只有在已经停止轮询时才重新启动
+    if (!httpPollingActive && !pollingId && peerId) {
+      addLog(`连接断开，重新开始轮询...`, 'info');
+      startPolling(peerId, connection, isInitiator);
+    }
   };
 
   // 发送消息
