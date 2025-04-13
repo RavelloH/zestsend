@@ -29,7 +29,7 @@ export default function Layout({ children }) {
           <link rel="icon" href="/favicon.ico" />
         </Head>
 
-        <header className="sticky top-0 z-50 backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700">
+        <header className="sticky top-0 z-150 backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700">
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
             <motion.div 
               initial={{ opacity: 0, x: -20 }}

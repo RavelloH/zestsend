@@ -5,16 +5,35 @@ export default async function handler(req, res) {
   if (req.method === 'POST') {
     const { roomId, peerId, ipInfo } = req.body;
     
-    if (!roomId || !peerId || !ipInfo) {
-      return res.status(400).json({ message: '缺少必要参数' });
+    if (!roomId || !peerId) {
+      console.error('存储IP信息失败: 缺少roomId或peerId', req.body);
+      return res.status(400).json({ message: '缺少必要参数 roomId 或 peerId' });
+    }
+    
+    if (!ipInfo) {
+      console.error('存储IP信息失败: ipInfo为空', req.body);
+      return res.status(400).json({ message: '缺少必要参数 ipInfo' });
     }
     
     try {
+      console.log(`存储IP信息: roomId=${roomId}, peerId=${peerId}`, ipInfo);
       await storeIPInfo(roomId, peerId, ipInfo);
-      return res.status(200).json({ success: true });
+      
+      // 验证存储是否成功
+      const storedInfo = await getIPInfo(roomId, peerId);
+      if (!storedInfo) {
+        console.error('IP信息存储失败: 存储后无法检索到数据');
+        return res.status(500).json({ message: 'IP信息存储失败' });
+      }
+      
+      return res.status(200).json({ 
+        success: true,
+        message: 'IP信息存储成功',
+        verified: true 
+      });
     } catch (error) {
       console.error('Error storing IP info:', error);
-      return res.status(500).json({ message: '服务器错误' });
+      return res.status(500).json({ message: '服务器错误: ' + error.message });
     }
   }
   

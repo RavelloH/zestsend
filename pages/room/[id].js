@@ -242,8 +242,17 @@ export default function Room() {
             const res = await fetch(`/api/signaling/poll?roomId=${roomId}&peerId=${peerId}`);
             const data = await res.json();
             
-            if (res.ok && data.ipInfo && data.ipInfo.ip !== (peerIpInfo?.ip || '')) {
-              setPeerIpInfo(data.ipInfo);
+            if (res.ok) {
+              // 检查是否有更新的IP信息
+              if (data.ipInfo && JSON.stringify(data.ipInfo) !== JSON.stringify(peerIpInfo)) {
+                setPeerIpInfo(data.ipInfo);
+                console.log("低频轮询模式：更新对方IP信息:", data.ipInfo);
+              }
+              // 如果没有ipInfo但有peerIPInfo，使用对方的自己信息作为自己的对方信息
+              else if (data.peerIPInfo && JSON.stringify(data.peerIPInfo) !== JSON.stringify(peerIpInfo)) {
+                setPeerIpInfo(data.peerIPInfo);
+                console.log("低频轮询模式：使用远程自身IP信息:", data.peerIPInfo);
+              }
             }
           } catch (error) {
             console.error('IP polling error:', error);
@@ -272,31 +281,24 @@ export default function Room() {
             setRemotePeerId(data.remotePeerId);
           }
           
-          // 获取对方IP信息（使用ipInfo或peerIPInfo字段）
-          if (data.ipInfo || data.peerIPInfo) {
-            if (data.ipInfo) {
-              setPeerIpInfo(data.ipInfo);
-            } else if (data.peerIPInfo) {
-              // 使用对方返回的自己的IP信息作为对方的IP信息
-              setPeerIpInfo(data.peerIPInfo);
-            }
+          // 更新对方IP信息 - 优先使用ipInfo，如果为null则尝试使用peerIPInfo
+          if (data.ipInfo && JSON.stringify(data.ipInfo) !== JSON.stringify(peerIpInfo)) {
+            setPeerIpInfo(data.ipInfo);
+            console.log("更新对方IP信息:", data.ipInfo);
+          } else if (data.peerIPInfo && JSON.stringify(data.peerIPInfo) !== JSON.stringify(peerIpInfo)) {
+            // 使用对方返回的自己的IP信息作为对方的IP信息
+            setPeerIpInfo(data.peerIPInfo);
+            console.log("使用远程自身IP信息:", data.peerIPInfo);
           }
           
+          // 已连接状态下的处理
+          if (connectionState.isConnected) {
+            // 如果已连接，只更新远程ID和IP信息，不尝试重新连接
+            return; // 直接返回，避免尝试建立新连接
+          }
+          
+          // 未连接状态下，检查是否有可用的远程Peer进行连接
           if (data.remotePeerId) {
-            // 每次处理前再次检查连接状态
-            if (connectionState.isConnected) {
-              // 如果已连接，只更新远程ID和IP信息，不尝试重新连接
-              // 同时不产生任何日志
-              if (data.remotePeerId !== remotePeerId) {
-                setRemotePeerId(data.remotePeerId);
-              }
-              
-              if (data.ipInfo) {
-                setPeerIpInfo(data.ipInfo);
-              }
-              return;
-            }
-            
             // 检查是否是新的远程对等方ID - 只有在变化时才输出日志
             const isNewRemotePeer = data.remotePeerId !== logState.lastRemotePeerId;
             if (isNewRemotePeer) {
@@ -356,11 +358,6 @@ export default function Room() {
                 }
               }, delayTime);
             }
-            
-            // 获取对方IP信息
-            if (data.ipInfo) {
-              setPeerIpInfo(data.ipInfo);
-            }
           }
         }
       } catch (error) {
@@ -386,18 +383,32 @@ export default function Room() {
         const ipData = await res.json();
         setIpInfo(ipData);
         
-        // 将IP信息存储到服务器
-        await fetch('/api/signaling/ip', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            roomId,
-            peerId,
-            ipInfo: ipData
-          }),
-        });
+        // 避免在未获取到peerId时尝试存储IP信息
+        if (peerId) {
+          // 将IP信息存储到服务器
+          try {
+            console.log(`存储IP信息: roomId=${roomId}, peerId=${peerId}`, ipData);
+            const storeRes = await fetch('/api/signaling/ip', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                roomId,
+                peerId,
+                ipInfo: ipData
+              }),
+            });
+            
+            if (!storeRes.ok) {
+              console.error('存储IP信息失败:', await storeRes.text());
+            }
+          } catch (error) {
+            console.error('存储IP信息请求失败:', error);
+          }
+        } else {
+          console.log('未存储IP信息: peerId为空');
+        }
       }
     } catch (error) {
       console.error('Error fetching IP info:', error);
@@ -477,7 +488,7 @@ export default function Room() {
       case 'file-complete':
         addLog(`文件接收完成: ${data.fileName}`, 'success');
         setReceivedFiles(prev => [
-          ...prev,
+          ...prev, 
           {
             id: data.fileId,
             name: data.fileName,
@@ -608,7 +619,6 @@ export default function Room() {
         connection.stopMediaStream('audio');
         connection.stopMediaStream('video');
       }
-      
       return;
     }
     
@@ -702,8 +712,7 @@ export default function Room() {
             <div className="flex items-center space-x-2">
               <div className={`px-3 py-1 rounded-full text-sm ${connected 
                 ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
-                : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'}`}
-              >
+                : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'}`}>
                 {connected ? '已连接' : '等待连接...'}
               </div>
               
@@ -711,7 +720,7 @@ export default function Room() {
                 onClick={copyRoomLink} 
                 className="flex items-center space-x-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
               >
-                {copySuccess ? <FiCheck className="mr-1" /> : <FiCopy className="mr-1" />}
+                {copySuccess ? <FiCheck className="mr-1" /> : <FiCopy className="mr-1" />} 
                 <span>{copySuccess ? '已复制' : '复制链接'}</span>
               </button>
               
@@ -734,7 +743,7 @@ export default function Room() {
 
         {/* 视频流显示 */}
         {videoStream && (
-          <motion.div
+          <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             className="mb-6 bg-black rounded-lg overflow-hidden shadow-lg"
@@ -752,7 +761,7 @@ export default function Room() {
             />
           </motion.div>
         )}
-        
+
         {/* 主要内容 */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* 左侧 - 文件传输 */}
@@ -769,7 +778,7 @@ export default function Room() {
                 receivedFiles={receivedFiles}
               />
             </motion.div>
-            
+
             {/* 媒体聊天 */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -786,7 +795,7 @@ export default function Room() {
                 addLog={addLog}
               />
             </motion.div>
-            
+
             {/* IP地图 */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -798,26 +807,33 @@ export default function Room() {
               <IPMap ipInfo={ipInfo} peerIpInfo={peerIpInfo} />
             </motion.div>
           </div>
-          
+
           {/* 右侧 - 聊天、连接状态和日志 */}
           <div className="space-y-6">
             {/* 连接状态 */}
-            <ConnectionStatus
-              httpPolling={httpPollingActive}
-              p2pConnection={p2pConnectionActive}
-              dataChannel={dataChannelActive}
-              isInitiator={isInitiator}
-              peerId={peerId}
-              remotePeerId={remotePeerId}
-              httpLatency={httpLatency}
-              p2pLatency={p2pLatency}
-            />
-            
-            {/* 聊天 */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, delay: 0.3 }}
+              className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md"
+            >
+              <ConnectionStatus
+                httpPolling={httpPollingActive}
+                p2pConnection={p2pConnectionActive}
+                dataChannel={dataChannelActive}
+                isInitiator={isInitiator}
+                peerId={peerId}
+                remotePeerId={remotePeerId}
+                httpLatency={httpLatency}
+                p2pLatency={p2pLatency}
+              />
+            </motion.div>
+
+            {/* 聊天 */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.4 }}
               className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md"
             >
               <Chat 
@@ -825,12 +841,12 @@ export default function Room() {
                 messages={messages}
               />
             </motion.div>
-            
+
             {/* 日志 */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: 0.4 }}
+              transition={{ duration: 0.3, delay: 0.5 }}
               className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md"
             >
               <h2 className="text-lg font-medium mb-2">连接日志</h2>

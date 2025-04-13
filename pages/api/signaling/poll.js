@@ -57,28 +57,42 @@ export default async function handler(req, res) {
     
     // 尝试获取远程Peer的IP信息
     let ipInfo = null;
-    let peerIPInfo = null; // 添加对方的IP信息
+    let peerIPInfo = null;
     
+    // 获取远程节点的IP信息
     if (remotePeerId) {
-      ipInfo = await getIPInfo(roomId, remotePeerId);
-      
-      // 添加: 获取对方的IP信息
-      if (selfPeer && selfPeer.id) {
-        peerIPInfo = await getIPInfo(roomId, selfPeer.id);
+      try {
+        // console.log(`尝试获取远程IP信息，roomId=${roomId}, remotePeerId=${remotePeerId}`);
+        ipInfo = await getIPInfo(roomId, remotePeerId);
+        // console.log(`获取到的远程IP信息: ${ipInfo ? JSON.stringify(ipInfo) : 'null'}`);
+      } catch (error) {
+        // console.error(`获取远程IP信息出错: ${error.message}`);
       }
     }
     
+    // 获取自己的IP信息，以便在对方获取自己的IP时使用
+    try {
+      if (peerId) {
+        // console.log(`尝试获取本地IP信息，roomId=${roomId}, peerId=${peerId}`);
+        peerIPInfo = await getIPInfo(roomId, peerId);
+        // console.log(`获取到的本地IP信息: ${peerIPInfo ? JSON.stringify(peerIPInfo) : 'null'}`);
+      }
+    } catch (error) {
+      // console.error(`获取本地IP信息出错: ${error.message}`);
+    }
+    
+    // 返回所有信息，即使某些字段为null
     return res.status(200).json({
       roomId,
       peerId,
       remotePeerId,
       remotePeerType,
       ipInfo,
-      peerIPInfo, // 添加对方的IP信息
+      peerIPInfo,
       timestamp: Date.now(),
       peerCount: room.peers ? room.peers.length : 0,
-      shouldInitiateConnection, // 双方都可以主动连接
-      connectionPriority // 添加连接优先级参数
+      shouldInitiateConnection,
+      connectionPriority
     });
   } catch (error) {
     console.error('Polling error:', error);
