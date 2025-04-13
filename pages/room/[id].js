@@ -57,6 +57,12 @@ export default function Room() {
   // 保存connection对象的引用
   const connectionRef = useRef(null);
 
+  // 在现有的state声明部分添加stunServer状态
+  const [stunServer, setStunServer] = useState({
+    active: false,
+    url: null
+  });
+
   // 添加日志
   const addLog = useCallback((message, level = 'info') => {
     const log = {
@@ -154,6 +160,22 @@ export default function Room() {
       await p2pConnection.init();
       setConnection(p2pConnection);
       connectionRef.current = p2pConnection; // 保存连接对象到ref
+      
+      // 新增：获取STUN服务器信息
+      p2pConnection.onSTUNServerChange((stunInfo) => {
+        if (stunInfo) {
+          setStunServer({
+            active: true,
+            url: stunInfo.url
+          });
+          addLog(`使用STUN服务器: ${stunInfo.url}`, 'info');
+        } else {
+          setStunServer({
+            active: false,
+            url: null
+          });
+        }
+      });
       
       // 为媒体流注册回调
       p2pConnection.onMediaStream((stream, type) => {
@@ -870,6 +892,7 @@ export default function Room() {
                 remotePeerId={remotePeerId}
                 httpLatency={httpLatency}
                 p2pLatency={p2pLatency}
+                stunServer={stunServer}
               />
             </motion.div>
 
