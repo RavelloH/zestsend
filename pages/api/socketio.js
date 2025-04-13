@@ -178,7 +178,11 @@ export default async function SocketHandler(req, res) {
       if (pubClient && subClient) {
         try {
           debugLog('设置Redis适配器');
-          const redisAdapter = createAdapter(pubClient, subClient);
+          const redisAdapter = createAdapter(pubClient, subClient, {
+            // 添加自定义选项，改进会话恢复
+            key: 'socketio', // 自定义Redis key前缀
+            requestsTimeout: 10000, // 增加请求超时
+          });
           io.adapter(redisAdapter);
           
           debugLog('Redis适配器已设置，测试连接');
@@ -202,12 +206,33 @@ export default async function SocketHandler(req, res) {
       // 设置Engine.IO错误处理
       io.engine.on('connection_error', (err) => {
         debugLog(`Engine.IO 连接错误`, { error: err.message, code: err.code, context: err.context || 'unknown', req: err.req ? `${err.req.method} ${err.req.url}` : 'unknown' });
+        
+        // 针对会话ID未知错误的特殊处理
+        if (err.message === "Session ID unknown" && err.req && pubClient) {
+          const url = new URL(err.req.url, 'http://localhost');
+          const sid = url.searchParams.get('sid');
+          if (sid) {
+            debugLog(`尝试恢复丢失的会话: ${sid}`);
+            // 强制从Redis中清除这个无效的会话ID
+            pubClient.del(`socketio:${sid}`).catch(e => {
+              debugLog(`清除无效会话ID失败: ${e.message}`);
+            });
+          }
+        }
       });
       
       // 监听HTTP长轮询请求错误
       io.engine.on('initialHeaders', (headers, req) => {
         // 添加自定义头以缓解缓存问题
         headers['X-Socket-Session-Time'] = Date.now().toString();
+        headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+        headers['Pragma'] = 'no-cache';
+        headers['Expires'] = '0';
+      });
+
+      // 添加更多的服务器事件监听器
+      io.of('/').adapter.on('error', (err) => {
+        debugLog('Socket.IO Adapter 错误', { error: err.message });
       });
 
       // 初始化清理定时器
@@ -247,14 +272,57 @@ export default async function SocketHandler(req, res) {
       // Socket.IO连接处理
       io.on('connection', (socket) => {
         const transport = socket.conn.transport.name;
+        const query = socket.handshake.query || {};
+        const clientSessionId = query.sessionId || null;
+        
         debugLog(`客户端连接: ${socket.id}`, {
           transport,
+          clientSessionId,
           remoteAddress: socket.handshake.address,
           headers: {
             'user-agent': socket.handshake.headers['user-agent'],
             'x-forwarded-for': socket.handshake.headers['x-forwarded-for'] || 'none'
           }
         });
+        
+        // 如果查询参数中有sessionId，尝试恢复会话
+        if (clientSessionId && pubClient) {
+          pubClient.get(`session:${clientSessionId}:socket`).then(oldSocketId => {
+            if (oldSocketId) {
+              debugLog(`恢复会话: ${clientSessionId}`, { oldSocketId, newSocketId: socket.id });
+              // 更新Redis中的会话映射
+              pubClient.set(`session:${clientSessionId}:socket`, socket.id, 'EX', 86400);
+              pubClient.set(`socket:${socket.id}:session`, clientSessionId, 'EX', 86400);
+              
+              // 更新本地存储
+              sessionStore.set(socket.id, clientSessionId);
+              socket.sessionId = clientSessionId;
+              
+              // 查找相关房间并更新
+              Object.keys(rooms).forEach(roomId => {
+                if (rooms[roomId].users.has(clientSessionId)) {
+                  debugLog(`更新房间中的socket映射: ${roomId}`, { sessionId: clientSessionId });
+                  rooms[roomId].users.set(clientSessionId, socket.id);
+                  userSessions[socket.id] = { roomId, sessionId: clientSessionId };
+                  
+                  // 加入Socket.io房间
+                  socket.join(roomId);
+                  socket.roomId = roomId;
+                  
+                  // 通知用户房间状态
+                  socket.emit('room-status', { 
+                    shouldInitiate: rooms[roomId].initiator === clientSessionId, 
+                    usersCount: rooms[roomId].users.size,
+                    allSessions: Array.from(rooms[roomId].users.keys()),
+                    resumedSession: true
+                  });
+                }
+              });
+            }
+          }).catch(err => {
+            debugLog(`恢复会话失败: ${err.message}`);
+          });
+        }
         
         // 存储会话ID到Redis以实现跨实例会话恢复
         socket.on('register-session', async (sessionId) => {
@@ -267,12 +335,16 @@ export default async function SocketHandler(req, res) {
           
           // 记录到本地Map
           sessionStore.set(socket.id, sessionId);
+          socket.sessionId = sessionId; // 直接在socket对象上存储
           
           // 如果有Redis，存储会话映射
           if (pubClient) {
             try {
-              await pubClient.set(`socket:${socket.id}:session`, sessionId, 'EX', 86400); // 24小时过期
-              await pubClient.set(`session:${sessionId}:socket`, socket.id, 'EX', 86400);
+              // 使用管道批量执行
+              await pubClient.pipeline()
+                .set(`socket:${socket.id}:session`, sessionId, 'EX', 86400) // 24小时过期
+                .set(`session:${sessionId}:socket`, socket.id, 'EX', 86400)
+                .exec();
               debugLog(`会话ID已存储到Redis: ${sessionId}`);
             } catch (err) {
               debugLog('存储会话ID到Redis失败', { error: err.message });
@@ -521,11 +593,65 @@ export default async function SocketHandler(req, res) {
 
         // 添加心跳检测处理
         socket.on('heartbeat', () => {
+          // 获取当前会话ID
+          const sessionId = socket.sessionId || sessionStore.get(socket.id) || null;
+          
           socket.emit('heartbeat-response', { 
             timestamp: Date.now(),
             transport: socket.conn.transport.name,
-            sessionId: socket.sessionId || sessionStore.get(socket.id) || 'unknown'
+            sessionId: sessionId || 'unknown'
           });
+          
+          // 如果有会话ID，刷新Redis中的过期时间
+          if (sessionId && pubClient) {
+            pubClient.pipeline()
+              .expire(`socket:${socket.id}:session`, 86400)
+              .expire(`session:${sessionId}:socket`, 86400)
+              .exec()
+              .catch(err => {
+                debugLog('刷新会话过期时间失败', { error: err.message });
+              });
+          }
+        });
+        
+        // 添加重连处理
+        socket.on('reconnect-attempt', async (data) => {
+          const { sessionId, roomId } = data || {};
+          if (!sessionId) return;
+          
+          debugLog(`客户端尝试重连`, { sessionId, roomId, socketId: socket.id });
+          
+          // 更新会话映射
+          sessionStore.set(socket.id, sessionId);
+          socket.sessionId = sessionId;
+          
+          if (pubClient) {
+            try {
+              await pubClient.pipeline()
+                .set(`socket:${socket.id}:session`, sessionId, 'EX', 86400)
+                .set(`session:${sessionId}:socket`, socket.id, 'EX', 86400)
+                .exec();
+            } catch (err) {
+              debugLog('更新重连会话数据失败', { error: err.message });
+            }
+          }
+          
+          // 如果提供了房间ID，尝试重新加入
+          if (roomId && rooms[roomId]) {
+            debugLog(`重连用户重新加入房间`, { roomId, sessionId });
+            rooms[roomId].users.set(sessionId, socket.id);
+            userSessions[socket.id] = { roomId, sessionId };
+            socket.join(roomId);
+            socket.roomId = roomId;
+            
+            // 通知用户房间状态
+            socket.emit('room-status', {
+              shouldInitiate: rooms[roomId].initiator === sessionId,
+              usersCount: rooms[roomId].users.size,
+              allSessions: Array.from(rooms[roomId].users.keys()),
+              reconnected: true
+            });
+          }
         });
       });
 

@@ -566,7 +566,8 @@ export default function Room() {
       autoConnect: true,             // 自动连接
       rejectUnauthorized: false,     // 允许自签名证书
       query: {                       // 添加会话ID作为查询参数
-        sessionId: sessionIdRef.current
+        sessionId: sessionIdRef.current,
+        roomId: roomId               // 同时传递房间ID
       }
     };
     
@@ -582,6 +583,21 @@ export default function Room() {
       setStatusMessage(`连接错误: ${err.message}，尝试重新连接...`);
     });
     
+    // 添加传输错误处理
+    socket.io.engine.on('transportError', (err) => {
+      console.error('传输错误:', err);
+      setStatusMessage(`传输错误: ${err.message}，尝试其他传输方式...`);
+      
+      // 记录客户端详细信息用于调试
+      console.log('客户端详细信息:', {
+        userAgent: navigator.userAgent,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        language: navigator.language || 'unknown',
+        screenSize: `${window.screen.width}x${window.screen.height}`,
+        sessionId: sessionIdRef.current
+      });
+    });
+    
     // 连接事件
     socket.on('connect', () => {
       console.log('信令服务器已连接, socket ID:', socket.id, '传输类型:', socket.io.engine.transport.name);
@@ -591,7 +607,7 @@ export default function Room() {
       // 首先注册会话ID
       socket.emit('register-session', sessionIdRef.current);
       
-      // 设置定期心跳检测
+      // 设置定期心跳检测 - 增加频率，在serverless环境中保持连接
       const heartbeatInterval = setInterval(() => {
         if (socket.connected) {
           try {
@@ -605,13 +621,23 @@ export default function Room() {
             console.error('发送心跳时出错:', err);
           }
         }
-      }, 120000); // 每2分钟发送一次心跳
+      }, 30000); // 每30秒发送一次心跳，更频繁以保持连接
       
       // 保存清理函数的引用
       socket.heartbeatInterval = heartbeatInterval;
       
       // 加入房间，发送会话ID
       socket.emit('join-room', roomId, sessionIdRef.current);
+      
+      // 如果之前有断线重连的情况，尝试恢复会话状态
+      if (remoteSessionIdRef.current) {
+        console.log('尝试恢复之前的会话连接');
+        socket.emit('reconnect-attempt', {
+          sessionId: sessionIdRef.current,
+          roomId: roomId,
+          remoteSessionId: remoteSessionIdRef.current
+        });
+      }
       
       // 发送暂存的信号
       if (pendingCandidatesRef.current.length > 0 && peerRef.current) {
@@ -628,8 +654,8 @@ export default function Room() {
     });
     
     // 房间状态事件 - 简化以确保一致处理
-    socket.on('room-status', ({ shouldInitiate, usersCount, allSessions }) => {
-      console.log('房间状态:', { shouldInitiate, usersCount, allSessions });
+    socket.on('room-status', ({ shouldInitiate, usersCount, allSessions, resumedSession, reconnected }) => {
+      console.log('房间状态:', { shouldInitiate, usersCount, allSessions, resumedSession, reconnected });
       
       // 存储房间用户信息
       setRoomUsers(allSessions || []);
@@ -639,27 +665,38 @@ export default function Room() {
       setConnectionDiagnostics(prev => ({
         ...prev,
         lastInitiator: shouldInitiate,
-        shouldInitiateReason: `服务器分配的发起方: ${shouldInitiate ? '是' : '否'}`
+        shouldInitiateReason: `服务器分配的发起方: ${shouldInitiate ? '是' : '否'}`,
+        resumedSession: resumedSession || false,
+        reconnected: reconnected || false
       }));
       
       // 根据房间状态创建连接
       if (usersCount === 2) {  // 只有当房间有两人时才建立连接
         if (shouldInitiate) {
           // 需要主动发起连接
-          setStatusMessage('作为发起方，开始连接对方...');
-          // 销毁现有连接并创建新的
-          if (peerRef.current) {
+          setStatusMessage(resumedSession ? '恢复连接中...' : '作为发起方，开始连接对方...');
+          // 销毁现有连接并创建新的，除非是恢复会话且已连接
+          if (peerRef.current && (connectionStatus !== 'connected' || !resumedSession)) {
             peerRef.current.destroy();
             peerRef.current = null;
           }
-          createPeerConnection(true);
+          
+          // 如果没有活跃的连接，创建新的
+          if (!peerRef.current) {
+            createPeerConnection(true);
+          }
         } else {
           // 等待对方连接
-          setStatusMessage('作为接收方，等待对方连接...');
+          setStatusMessage(resumedSession ? '等待对方恢复连接...' : '作为接收方，等待对方连接...');
           // 确保我们没有尝试发起连接
-          if (peerRef.current && peerRef.current.initiator) {
+          if (peerRef.current && peerRef.current.initiator && !resumedSession) {
             peerRef.current.destroy();
             peerRef.current = null;
+          }
+          
+          // 如果没有活跃的连接且不是恢复会话，创建非发起方连接
+          if (!peerRef.current && !resumedSession) {
+            createPeerConnection(false);
           }
         }
       } else if (usersCount < 2) {
@@ -744,8 +781,48 @@ export default function Room() {
     socket.on('connect_error', (err) => {
       console.error('连接服务器出错:', err);
       isSocketConnectedRef.current = false;
+      
+      // 记录详细错误信息
+      const errorDetails = {
+        message: err.message,
+        type: err.type,
+        description: err.description,
+        context: err.context,
+        time: new Date().toISOString(),
+        sessionId: sessionIdRef.current,
+        roomId: roomId,
+        attempts: socket.io.reconnectionAttempts
+      };
+      console.log('连接错误详情:', errorDetails);
+      
+      // 更新UI
       setConnectionStatus('error');
       setErrorMessage(`连接服务器失败: ${err.message || '未知错误'}`);
+      
+      // 检查是否是会话ID错误，这种情况下尝试清除会话并重新连接
+      if (err.message && (
+          err.message.includes('Session ID unknown') || 
+          err.message.includes('session') || 
+          err.message.includes('sid')
+      )) {
+        console.log('检测到会话错误，尝试清除会话ID并重新连接');
+        
+        // 生成新的会话ID
+        const newSessionId = nanoid(10);
+        console.log(`重新生成会话ID: ${sessionIdRef.current} -> ${newSessionId}`);
+        sessionIdRef.current = newSessionId;
+        localStorage.setItem('zestsend_session_id', newSessionId);
+        
+        // 更新错误消息
+        setErrorMessage(`会话ID错误，已生成新ID: ${newSessionId.substring(0,8)}。点击"强制连接"重试。`);
+        
+        // 重置连接状态
+        socket.io.opts.query = {
+          sessionId: newSessionId,
+          roomId: roomId,
+          reset: 'true' // 添加重置标记
+        };
+      }
       
       // 尝试使用不同的传输方式
       if (socket.io && socket.io.engine && socket.io.engine.transport) {
@@ -823,7 +900,7 @@ export default function Room() {
       }
     };
   }, [roomId, createPeerConnection, handleReceivedSignal, connectionStatus]);
-  
+
   // 测试信令服务器连接
   const testConnection = () => {
     if (!socketRef.current || !isSocketConnectedRef.current) {
@@ -838,8 +915,89 @@ export default function Room() {
     socketRef.current.emit('connection-test', { roomId });
   };
   
+  // 添加一个新函数用于清除并重新连接
+  const resetAndReconnect = () => {
+    // 生成新的会话ID
+    const newSessionId = nanoid(10);
+    console.log(`重置会话ID: ${sessionIdRef.current} -> ${newSessionId}`);
+    sessionIdRef.current = newSessionId;
+    localStorage.setItem('zestsend_session_id', newSessionId);
+    
+    // 清理现有连接
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
+    
+    if (socketRef.current) {
+      // 清理心跳
+      if (socketRef.current.heartbeatInterval) {
+        clearInterval(socketRef.current.heartbeatInterval);
+      }
+      
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+    
+    // 重置计数器
+    connectAttemptsRef.current = 0;
+    
+    // 更新状态
+    setConnectionStatus('waiting');
+    setStatusMessage('正在重置连接...');
+    
+    // 重新初始化Socket连接
+    setTimeout(() => {
+      // 获取完整的服务器URL
+      let socketURL = window.location.origin;
+      if (process.env.NODE_ENV === 'development') {
+        socketURL = 'http://localhost:3000';
+      }
+      
+      // 创建新的Socket连接
+      const socket = io(socketURL, {
+        path: '/api/socketio',
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 10000,
+        timeout: 30000,
+        transports: ['polling'],
+        upgrade: false,
+        forceNew: true,
+        autoConnect: true,
+        rejectUnauthorized: false,
+        query: {
+          sessionId: newSessionId,
+          roomId: roomId,
+          reset: 'true'
+        }
+      });
+      
+      socketRef.current = socket;
+      
+      // 重新注册事件监听器 - 此处简化，实际应该复用代码
+      socket.on('connect', () => {
+        console.log('已重新连接到信令服务器');
+        isSocketConnectedRef.current = true;
+        setStatusMessage('已重新连接到服务器，正在加入房间...');
+        
+        socket.emit('register-session', newSessionId);
+        socket.emit('join-room', roomId, newSessionId);
+      });
+      
+      // 记录成功信息
+      console.log('已初始化新的Socket连接');
+    }, 1000);
+  };
+  
   // 作为发起方强制连接
-  const forceConnect = () => {
+  const forceConnect = (resetSession = false) => {
+    // 如果需要重置会话
+    if (resetSession) {
+      resetAndReconnect();
+      return;
+    }
+    
     // 设置强制发起方标志
     setForceInitiator(true);
     
@@ -934,14 +1092,22 @@ export default function Room() {
             animate={{ opacity: 1, y: 0 }}
             className="mb-6 p-4 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg"
           >
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
               <p>{errorMessage}</p>
-              <button 
-                onClick={forceConnect}
-                className="btn-secondary text-sm bg-red-200 dark:bg-red-800/40 hover:bg-red-300 dark:hover:bg-red-700/40"
-              >
-                强制连接
-              </button>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => forceConnect(true)}
+                  className="btn-secondary text-sm bg-red-200 dark:bg-red-800/40 hover:bg-red-300 dark:hover:bg-red-700/40"
+                >
+                  重置会话
+                </button>
+                <button 
+                  onClick={() => forceConnect(false)}
+                  className="btn-secondary text-sm bg-red-200 dark:bg-red-800/40 hover:bg-red-300 dark:hover:bg-red-700/40"
+                >
+                  强制连接
+                </button>
+              </div>
             </div>
           </motion.div>
         )}
