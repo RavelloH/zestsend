@@ -35,7 +35,8 @@ export default function Layout({ children }) {
           ></script>
         </Head>
 
-        <header className="sticky top-0 z-[1000] backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700">
+        <header className="sticky top-0 backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700"
+        style={{ zIndex: 3000 }}>
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
             <motion.div 
               initial={{ opacity: 0, x: -20 }}
