@@ -10,6 +10,7 @@ import MediaChat from '../../components/MediaChat';
 import { P2PConnection } from '../../lib/webrtc';
 import { motion } from 'framer-motion';
 import { FiUsers, FiRefreshCw, FiCopy, FiCheck, FiMonitor, FiX } from 'react-icons/fi';
+import { formatBytes } from '../../lib/utils';
 
 export default function Room() {
   const router = useRouter();
