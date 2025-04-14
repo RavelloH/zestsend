@@ -61,9 +61,11 @@ export default function ConnectionStatus({
           )}
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {/* 改进: 更新状态文本显示逻辑，保持UI一致性 */}
+          {/* 修改HTTP轮询状态显示逻辑，确保始终与实际状态一致 */}
           {title === "HTTP 轮询" ? 
-            (p2pConnection ? "P2P连接已建立，服务器轮询暂停" : (httpPolling ? "服务器轮询正常" : "等待服务器连接...")) 
+            (p2pConnection ? 
+              (httpPolling ? "P2P连接已建立但轮询未停止（状态不一致）" : "P2P连接已建立，服务器轮询暂停") 
+              : (httpPolling ? "服务器轮询正常" : "等待服务器连接...")) 
             : title === "TURN 服务器" && turnServer?.active && turnServer?.url
               ? `使用: ${turnServer.url.replace(/^(turn:|turns:)/, "").split("?")[0]}`
               : description}

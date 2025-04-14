@@ -75,6 +75,10 @@ export default function Room() {
   // 新增：是否使用TURN中继的状态
   const [usingTurnRelay, setUsingTurnRelay] = useState(false);
 
+  // 增加一个轮询初始化状态标志
+  const [pollingInitialized, setPollingInitialized] = useState(false);
+  const pollingCheckTimerRef = useRef(null); // 引用存储状态检查计时器
+
   // 添加日志
   const addLog = useCallback((message, level = 'info') => {
     const log = {
@@ -141,6 +145,8 @@ export default function Room() {
       // 清理轮询
       if (pollingId) {
         clearInterval(pollingId);
+        setPollingId(null);
+        setHttpPollingActive(false); // 重置HTTP轮询状态
       }
     };
   }, [roomId]); // 仅依赖roomId，通过ref控制重复执行
@@ -302,17 +308,32 @@ export default function Room() {
     }
   };
 
-  // 修改 startPolling 函数，确保连接后真正暂停轮询
+  // 修改 startPolling 函数，确保状态一致性
   const startPolling = (peerId, p2pConnection, isInitiator) => {
+    const isConnectedNow = connected; // 捕获当前状态的快照
+    
+    // 记录当前状态，帮助调试
+    console.log('启动轮询检查 - 当前状态:', { 
+      httpPollingActive, 
+      pollingId: !!pollingId, 
+      connected: isConnectedNow 
+    });
+    
     // 防止重复启动轮询
-    if (httpPollingActive || pollingId) {
+    if (httpPollingActive && pollingId) {
       addLog(`轮询已经在运行中，跳过`, 'info');
       return pollingId;
     }
     
     // 如果已经连接，不要启动轮询
-    if (connected) {
+    if (isConnectedNow) {
       addLog(`已连接状态，不启动轮询`, 'info');
+      // 确保状态一致 - 如果已连接就应该关闭轮询
+      setHttpPollingActive(false);
+      if (pollingId) {
+        clearInterval(pollingId);
+        setPollingId(null);
+      }
       return null;
     }
     
@@ -320,7 +341,7 @@ export default function Room() {
     setHttpPollingActive(true);
     
     // 跟踪内部连接状态，确保轮询内部立即感知连接状态变化
-    const connectionState = { isConnected: connected };
+    const connectionState = { isConnected: isConnectedNow };
     
     // 防止日志重复的变量
     const logState = {
@@ -457,6 +478,8 @@ export default function Room() {
   }, 3000);
   
   setPollingId(interval);
+  // 重要：标记轮询已初始化，这样状态检查才会开始工作
+  setPollingInitialized(true);
   return interval;
 };
 
@@ -688,8 +711,17 @@ export default function Room() {
         clearInterval(pollingId);
         setPollingId(null);
       }
+      
+      // 关键修复：确保状态完全重置再重启轮询
+      setHttpPollingActive(false);
       addLog(`P2P连接已断开，重新启动服务器轮询...`, 'info');
-      startPolling(peerId, connectionRef.current, isInitiator);
+      
+      // 使用setTimeout确保状态更新后再启动轮询
+      setTimeout(() => {
+        if (!pollingId) {
+          startPolling(peerId, connectionRef.current, isInitiator);
+        }
+      }, 500);
     }
   };
 
@@ -864,6 +896,66 @@ export default function Room() {
       router.push('/');
     }, 500);
   };
+
+  // 增加一个检查和修复轮询状态的函数
+  const checkAndFixPollingState = useCallback(() => {
+    // 只在轮询已初始化后执行自动修复，避免与初始化冲突
+    if (!pollingInitialized) {
+      return;
+    }
+
+    console.log('检查轮询状态 - 当前状态:', { 
+      connected, 
+      httpPollingActive,
+      pollingId: !!pollingId,
+      pollingInitialized
+    });
+
+    // 如果已连接但轮询还在运行，停止它
+    if (connected && httpPollingActive) {
+      addLog(`检测到状态不一致：已连接但轮询仍在运行，正在修复...`, 'warn');
+      if (pollingId) {
+        clearInterval(pollingId);
+        setPollingId(null);
+      }
+      setHttpPollingActive(false);
+    }
+    
+    // 如果未连接且轮询未运行，启动它
+    if (!connected && !httpPollingActive && !pollingId && peerId) {
+      addLog(`检测到状态不一致：未连接但轮询未运行，正在修复...`, 'warn');
+      // 使用延迟确保不会与其他代码冲突
+      setTimeout(() => {
+        // 再次检查，防止状态在这段时间内发生变化
+        if (!connected && !httpPollingActive && !pollingId && peerId) {
+          startPolling(peerId, connectionRef.current, isInitiator);
+        }
+      }, 100);
+    }
+  }, [connected, httpPollingActive, pollingId, peerId, pollingInitialized]);
+
+  // 添加一个Effect来监控状态并自动修复不一致
+  useEffect(() => {
+    // 清理之前的计时器
+    if (pollingCheckTimerRef.current) {
+      clearInterval(pollingCheckTimerRef.current);
+      pollingCheckTimerRef.current = null;
+    }
+    
+    // 只有当pollingInitialized为true时才启动状态检查定时器
+    if (pollingInitialized) {
+      pollingCheckTimerRef.current = setInterval(checkAndFixPollingState, 5000);
+      console.log('已启动轮询状态检查定时器');
+    }
+    
+    // 清理函数
+    return () => {
+      if (pollingCheckTimerRef.current) {
+        clearInterval(pollingCheckTimerRef.current);
+        pollingCheckTimerRef.current = null;
+      }
+    };
+  }, [checkAndFixPollingState, pollingInitialized]);
 
   // 如果房间ID未加载，显示加载界面
   if (!roomId) {
@@ -1069,7 +1161,7 @@ export default function Room() {
               />
             </motion.div>
 
-            {/* 日志 */}
+            {/* 日志 - 修复了标签错误 */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
