@@ -96,7 +96,7 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
       />
       
       {distance && (
-        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded shadow-sm backdrop-blur-sm z-[1000] text-xs text-center">
+        <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 bg-white/80 dark:bg-gray-800/80 px-2 py-1 rounded shadow-sm backdrop-blur-sm z-[100] text-xs text-center">
           <FiUsers className="inline mr-1" /> 连接距离约 {distance.toFixed(0)} 公里
         </div>
       )}
