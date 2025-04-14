@@ -61,9 +61,9 @@ export default function ConnectionStatus({
           )}
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {/* 根据P2P连接状态动态修改HTTP轮询描述 */}
-          {title === "HTTP 轮询" && p2pConnection 
-            ? "P2P连接已建立，服务器轮询暂停" 
+          {/* 改进: 更新HTTP轮询和TURN服务器描述逻辑，确保显示准确 */}
+          {title === "HTTP 轮询" ? 
+            (p2pConnection ? "P2P连接已建立，服务器轮询暂停" : (httpPolling ? "服务器轮询正常" : "等待服务器连接...")) 
             : title === "TURN 服务器" && turnServer?.active && turnServer?.url
               ? `使用: ${turnServer.url.replace(/^(turn:|turns:)/, "").split("?")[0]}`
               : description}
@@ -137,6 +137,7 @@ export default function ConnectionStatus({
           turnServer?.latency
         )}
 
+        {/* P2P 连接指示器 - 确保统一由usingTurnRelay决定显示方式 */}
         {renderStatusIndicator(
           "P2P 连接",
           p2pConnection,
@@ -144,7 +145,7 @@ export default function ConnectionStatus({
             className={p2pConnection ? "text-green-500" : "text-yellow-500"}
           />,
           p2pConnection 
-            ? (usingTurnRelay ? "通过TURN服务器进行中继" : "已建立P2P连接") 
+            ? (usingTurnRelay ? "通过TURN服务器进行中继" : "已建立P2P直接连接") 
             : "等待P2P连接...",
           p2pLatency
         )}

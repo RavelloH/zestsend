@@ -302,12 +302,18 @@ export default function Room() {
     }
   };
 
-  // 修改 startPolling 函数，在P2P连接建立后暂停轮询
+  // 修改 startPolling 函数，确保连接后真正停止轮询
   const startPolling = (peerId, p2pConnection, isInitiator) => {
     // 防止重复启动轮询
     if (httpPollingActive || pollingId) {
       addLog(`轮询已经在运行中，跳过`, 'info');
       return pollingId;
+    }
+    
+    // 如果已经连接，不要启动轮询
+    if (connected) {
+      addLog(`已连接状态，不启动轮询`, 'info');
+      return null;
     }
     
     addLog(`开始轮询检查对方连接状态...`);
@@ -326,18 +332,18 @@ export default function Room() {
     
   const interval = setInterval(async () => {
     try {
+      // 在每次轮询开始前，检查连接状态
       // 更新内部连接状态引用以获取最新状态
       connectionState.isConnected = connected;
       
-      // 如果已经连接，暂停轮询而不是减少频率
-      if (connectionState.isConnected) {
+      // 如果已经连接，立即停止轮询
+      if (connectionState.isConnected || connected) {
         clearInterval(interval);
         addLog(`P2P连接已建立，服务器轮询暂停`, 'info');
         
-        // 保持httpPollingActive为true，但实际上轮询已暂停
-        // 这样在ConnectionStatus组件中可以显示相应的状态
-        setPollingId(null); // 清除轮询ID，表示轮询已暂停
-        return; // 不再创建新的轮询
+        // 完全重置轮询状态
+        setPollingId(null);
+        return;
       }
       
       // 记录HTTP轮询开始时间
@@ -485,13 +491,20 @@ export default function Room() {
     }
   };
 
-  // 处理Peer连接
+  // 增强 handlePeerConnected 函数，确保连接建立时立即停止所有轮询
   const handlePeerConnected = (conn) => {
     addLog(`已与对方建立连接!`, 'success');
     // 立即设置连接状态，防止轮询继续尝试连接
     setConnected(true);
     setP2pConnectionActive(true);
     setDataChannelActive(true);
+    
+    // 新增：连接建立时立即停止所有轮询
+    if (pollingId) {
+      addLog(`连接已建立，停止所有轮询`, 'info');
+      clearInterval(pollingId);
+      setPollingId(null);
+    }
     
     // 确保远程PeerId在连接时被设置（加入对方ID）
     if (conn && conn.peer && !remotePeerId) {
@@ -518,11 +531,16 @@ export default function Room() {
           }));
         }
         
-        // 主动同步TURN状态给对方
+        // 主动同步TURN状态给对方，确保双方一致
         setTimeout(() => {
           if (connectionRef.current) {
             try {
               connectionRef.current.synchronizeTurnState();
+              
+              // 再发一次，确保对方收到
+              setTimeout(() => {
+                connectionRef.current.synchronizeTurnState();
+              }, 2000);
             } catch (error) {
               console.error("同步TURN状态失败:", error);
             }
@@ -564,21 +582,22 @@ export default function Room() {
         break;
         
       case 'connection-info':
-        // 处理连接信息，更新TURN状态
+        // 改进：处理连接信息，确保双方同步TURN状态
+        if (data.turnServer && data.turnServer.url) {
+          // 无论对方是否指示他们使用TURN中继，都更新TURN服务器信息
+          setTurnServer(prev => ({
+            ...prev,
+            url: data.turnServer.url,
+            active: true,
+            status: "已连接",
+            latency: data.turnServer.latency || prev.latency
+          }));
+        }
+          
+        // 如果对方指示正在使用TURN中继，则我们也应该显示为TURN中继
         if (data.usingTurnRelay) {
           setUsingTurnRelay(true);
           addLog(`检测到连接通过TURN服务器中继`, 'info');
-          
-          // 如果对方发送了TURN服务器信息，更新我们的状态
-          if (data.turnServer) {
-            setTurnServer(prev => ({
-              ...prev,
-              url: data.turnServer.url || prev.url,
-              active: true,
-              status: "已连接", // 明确显示"已连接"而不是"正在连接中"
-              latency: data.turnServer.latency || prev.latency
-            }));
-          }
         }
         break;
         
@@ -658,10 +677,14 @@ export default function Room() {
     }
     
     // 当连接断开时，无条件重启轮询，不再检查httpPollingActive
-    // 因为我们现在即使在P2P连接期间也保持httpPollingActive为true
-    if (!pollingId && peerId) {
+    if (peerId) {
+      // 先确保没有正在运行的轮询
+      if (pollingId) {
+        clearInterval(pollingId);
+        setPollingId(null);
+      }
       addLog(`P2P连接已断开，重新启动服务器轮询...`, 'info');
-      startPolling(peerId, connection, isInitiator);
+      startPolling(peerId, connectionRef.current, isInitiator);
     }
   };
 
