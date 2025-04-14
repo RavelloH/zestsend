@@ -106,6 +106,7 @@ export default function Home() {
                     placeholder="例如：1234"
                     className="w-full px-4 py-3 text-center text-2xl tracking-widest font-mono border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                     required
+                    data-umami-event="输入房间号"
                   />
                   {error && (
                     <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>
@@ -116,6 +117,7 @@ export default function Home() {
                   type="submit"
                   disabled={loading || !roomId}
                   className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                  data-umami-event="进入传输房间"
                 >
                   {loading ? (
                     <span>检查中...</span>

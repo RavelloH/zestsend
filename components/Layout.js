@@ -27,6 +27,12 @@ export default function Layout({ children }) {
           <title>ZestSend - P2P文件传输</title>
           <meta name="description" content="安全、私密的P2P文件传输" />
           <link rel="icon" href="/favicon.ico" />
+          {/* 添加 Umami 分析跟踪代码 */}
+          <script 
+            defer 
+            src="https://analytics.ravelloh.top/script.js" 
+            data-website-id="3bf45934-11bf-43d1-81c6-c5e418b7e6f8"
+          ></script>
         </Head>
 
         <header className="sticky top-0 z-[1000] backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700">
@@ -49,6 +55,7 @@ export default function Layout({ children }) {
                 onClick={toggleTheme}
                 className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
                 aria-label={theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'}
+                data-umami-event={theme === 'dark' ? '切换到亮色模式' : '切换到暗色模式'}
               >
                 {theme === 'dark' ? <FaSun size={20} /> : <FaMoon size={20} />}
               </motion.button>
@@ -61,6 +68,7 @@ export default function Layout({ children }) {
                 rel="noopener noreferrer"
                 className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-gray-700 dark:text-gray-300"
                 aria-label="GitHub 仓库"
+                data-umami-event="访问GitHub仓库"
               >
                 <FaGithub size={20} />
               </motion.a>
@@ -81,9 +89,16 @@ export default function Layout({ children }) {
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="underline hover:text-indigo-600 dark:hover:text-indigo-400"
+                data-umami-event="访问GitHub链接-页脚"
               >
                 GitHub:RavelloH/zestsend
-              </a>. Made by <a href="https://ravelloh.top/" target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-600 dark:hover:text-indigo-400">RavelloH</a>
+              </a>. Made by <a 
+                href="https://ravelloh.top/" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="underline hover:text-indigo-600 dark:hover:text-indigo-400"
+                data-umami-event="访问开发者主页"
+              >RavelloH</a>
             </p>
           </div>
         </footer>

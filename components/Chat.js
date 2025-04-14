@@ -82,6 +82,7 @@ export default function Chat({ onSendMessage, messages = [] }) {
           type="submit"
           className="px-4 py-2 bg-indigo-500 text-white rounded-r-lg flex items-center justify-center"
           disabled={message.trim() === ''}
+          data-umami-event="发送消息"
         >
           <FiSend />
         </motion.button>

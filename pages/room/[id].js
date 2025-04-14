@@ -9,7 +9,7 @@ import ConnectionStatus from '../../components/ConnectionStatus';
 import MediaChat from '../../components/MediaChat'; 
 import { P2PConnection } from '../../lib/webrtc';
 import { motion } from 'framer-motion';
-import { FiUsers, FiRefreshCw, FiCopy, FiCheck, FiMonitor } from 'react-icons/fi';
+import { FiUsers, FiRefreshCw, FiCopy, FiCheck, FiMonitor, FiX } from 'react-icons/fi';
 
 export default function Room() {
   const router = useRouter();
@@ -721,6 +721,60 @@ export default function Room() {
     });
   };
 
+  // 添加一个处理断开连接的函数
+  const handleDisconnect = () => {
+    // 如果已连接，先断开连接
+    if (connected && connection) {
+      addLog('正在断开连接...', 'info');
+      
+      // 停止任何媒体流
+      if (localMediaStream) {
+        localMediaStream.getTracks().forEach(track => track.stop());
+        setLocalMediaStream(null);
+      }
+      
+      if (remoteMediaStream) {
+        remoteMediaStream.getTracks().forEach(track => track.stop());
+        setRemoteMediaStream(null);
+      }
+      
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+        setVideoStream(null);
+      }
+      
+      // 关闭P2P连接
+      connection.close();
+      setConnection(null);
+      connectionRef.current = null;
+      setConnected(false);
+      
+      // 停止延迟测量
+      if (connectionRef.current) {
+        connectionRef.current.stopLatencyMeasurement();
+      }
+    }
+    
+    // 清理轮询
+    if (pollingId) {
+      clearInterval(pollingId);
+      setPollingId(null);
+    }
+    
+    // 重置状态
+    setHttpPollingActive(false);
+    setP2pConnectionActive(false);
+    setDataChannelActive(false);
+    
+    // 添加日志
+    addLog(`${connected ? '已断开连接' : '退出房间'}，返回首页`, 'info');
+    
+    // 延迟一小段时间后导航到首页，确保日志能被看到
+    setTimeout(() => {
+      router.push('/');
+    }, 500);
+  };
+
   // 如果房间ID未加载，显示加载界面
   if (!roomId) {
     return (
@@ -788,6 +842,7 @@ export default function Room() {
               <button 
                 onClick={copyRoomLink} 
                 className="flex items-center space-x-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+                data-umami-event="复制房间链接"
               >
                 {copySuccess ? <FiCheck className="mr-1" /> : <FiCopy className="mr-1" />}
                 <span>{copySuccess ? '已复制' : '复制链接'}</span>
@@ -801,11 +856,21 @@ export default function Room() {
                       ? 'bg-red-500 hover:bg-red-600 text-white' 
                       : 'bg-blue-500 hover:bg-blue-600 text-white'
                   }`}
+                  data-umami-event={screenSharing ? "停止屏幕共享" : "开始屏幕共享"}
                 >
                   <FiMonitor className="mr-1" />
                   <span>{screenSharing ? '停止共享' : '共享屏幕'}</span>
                 </button>
               )}
+              {/* 断开连接button */}
+              <button
+                onClick={handleDisconnect}
+                className="flex items-center space-x-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
+                data-umami-event={connected ? "断开连接" : "退出房间"}
+              >
+                <FiX className="mr-1" />
+                <span>{connected ? '断开连接' : '退出房间'}</span>
+              </button>
             </div>
           </div>
         </motion.div>
