@@ -20,8 +20,8 @@ export default function ConnectionStatus({
   httpLatency,
   p2pLatency,
   stunServer = null,
-  turnServer = null, // 新增TURN服务器状态参数
-  usingTurnRelay = false, // 新增：是否使用TURN中继
+  turnServer = null, // TURN服务器状态参数
+  usingTurnRelay = false, // 是否使用TURN中继
   className = "",
 }) {
   // 定义状态指示器
@@ -64,7 +64,9 @@ export default function ConnectionStatus({
           {/* 根据P2P连接状态动态修改HTTP轮询描述 */}
           {title === "HTTP 轮询" && p2pConnection 
             ? "P2P连接已建立，服务器轮询暂停" 
-            : description}
+            : title === "TURN 服务器" && turnServer?.active && turnServer?.url
+              ? `使用: ${turnServer.url.replace(/^(turn:|turns:)/, "").split("?")[0]}`
+              : description}
         </p>
       </div>
     </div>
@@ -116,7 +118,7 @@ export default function ConnectionStatus({
           stunServer?.latency
         )}
         
-        {/* 新增TURN服务器状态 */}
+        {/* TURN服务器状态 - 修改描述显示逻辑 */}
         {renderStatusIndicator(
           "TURN 服务器",
           turnServer?.active,
@@ -125,9 +127,13 @@ export default function ConnectionStatus({
               turnServer?.active ? "text-green-500" : "text-yellow-500"
             }
           />,
-          turnServer?.status || (turnServer?.url 
-            ? `${turnServer.url.replace("turn:", "").split("?")[0]}: ${turnServer.status || "未使用"}` 
-            : "未找到可用服务器"),
+          turnServer?.active
+            ? turnServer.url
+              ? `使用: ${turnServer.url.replace(/^(turn:|turns:)/, "").split("?")[0]}`
+              : "连接正常"
+            : turnServer?.url && turnServer?.status
+              ? turnServer.status
+              : "未使用TURN服务器",
           turnServer?.latency
         )}
 

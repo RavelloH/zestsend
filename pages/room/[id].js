@@ -500,11 +500,34 @@ export default function Room() {
     }
     
     // 检查是否正在使用TURN中继
-    if (connectionRef.current && connectionRef.current.isUsingTurnRelay) {
+    if (connectionRef.current) {
       const isTurnRelay = connectionRef.current.isUsingTurnRelay();
       setUsingTurnRelay(isTurnRelay);
+      
       if (isTurnRelay) {
         addLog(`连接通过TURN服务器中继建立`, 'info');
+        
+        // 更新TURN服务器状态为"已连接"
+        if (connectionRef.current.activeTurnServer) {
+          setTurnServer(prev => ({
+            ...prev,
+            active: true,
+            status: "已连接", // 明确显示为已连接
+            url: connectionRef.current.activeTurnServer.url,
+            latency: connectionRef.current.activeTurnServer.latency
+          }));
+        }
+        
+        // 主动同步TURN状态给对方
+        setTimeout(() => {
+          if (connectionRef.current) {
+            try {
+              connectionRef.current.synchronizeTurnState();
+            } catch (error) {
+              console.error("同步TURN状态失败:", error);
+            }
+          }
+        }, 500);
       }
     }
     
@@ -538,6 +561,25 @@ export default function Room() {
             isSelf: false
           }
         ]);
+        break;
+        
+      case 'connection-info':
+        // 处理连接信息，更新TURN状态
+        if (data.usingTurnRelay) {
+          setUsingTurnRelay(true);
+          addLog(`检测到连接通过TURN服务器中继`, 'info');
+          
+          // 如果对方发送了TURN服务器信息，更新我们的状态
+          if (data.turnServer) {
+            setTurnServer(prev => ({
+              ...prev,
+              url: data.turnServer.url || prev.url,
+              active: true,
+              status: "已连接", // 明确显示"已连接"而不是"正在连接中"
+              latency: data.turnServer.latency || prev.latency
+            }));
+          }
+        }
         break;
         
       case 'file-start':
@@ -586,7 +628,10 @@ export default function Room() {
         break;
       
       default:
-        console.log('Received data:', data);
+        if (data.type && data.type !== 'ping' && data.type !== 'pong') {
+          console.log('Received data:', data);
+        }
+        break;
     }
   };
 
