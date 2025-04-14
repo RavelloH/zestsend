@@ -7,6 +7,7 @@ import {
   FiClock,
   FiServer,
   FiGlobe,
+  FiRepeat
 } from "react-icons/fi";
 
 export default function ConnectionStatus({
@@ -18,7 +19,9 @@ export default function ConnectionStatus({
   remotePeerId,
   httpLatency,
   p2pLatency,
-  stunServer = null, // 新增STUN服务器状态参数
+  stunServer = null,
+  turnServer = null, // 新增TURN服务器状态参数
+  usingTurnRelay = false, // 新增：是否使用TURN中继
   className = "",
 }) {
   // 定义状态指示器
@@ -95,7 +98,8 @@ export default function ConnectionStatus({
           httpPolling ? "服务器轮询正常" : "等待服务器连接...",
           httpLatency
         )}
-        {/* 新增STUN服务器状态显示，增加延迟参数 */}
+        
+        {/* STUN服务器状态 */}
         {renderStatusIndicator(
           "STUN 服务器",
           stunServer?.active,
@@ -109,7 +113,22 @@ export default function ConnectionStatus({
               ? `使用: ${stunServer.url.replace("stun:", "")}`
               : "连接正常"
             : "未使用STUN服务器",
-          stunServer?.latency // 新增：传递STUN服务器延迟
+          stunServer?.latency
+        )}
+        
+        {/* 新增TURN服务器状态 */}
+        {renderStatusIndicator(
+          "TURN 服务器",
+          turnServer?.active,
+          <FiRepeat
+            className={
+              turnServer?.active ? "text-green-500" : "text-yellow-500"
+            }
+          />,
+          turnServer?.status || (turnServer?.url 
+            ? `${turnServer.url.replace("turn:", "").split("?")[0]}: ${turnServer.status || "未使用"}` 
+            : "未找到可用服务器"),
+          turnServer?.latency
         )}
 
         {renderStatusIndicator(
@@ -118,7 +137,9 @@ export default function ConnectionStatus({
           <FiWifi
             className={p2pConnection ? "text-green-500" : "text-yellow-500"}
           />,
-          p2pConnection ? "已建立P2P连接" : "等待P2P连接...",
+          p2pConnection 
+            ? (usingTurnRelay ? "通过TURN服务器进行中继" : "已建立P2P连接") 
+            : "等待P2P连接...",
           p2pLatency
         )}
 

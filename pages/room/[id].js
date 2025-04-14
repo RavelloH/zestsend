@@ -63,6 +63,17 @@ export default function Room() {
     url: null,
     latency: null
   });
+  
+  // 新增：添加turnServer状态
+  const [turnServer, setTurnServer] = useState({
+    active: false,
+    url: null,
+    latency: null,
+    status: "未连接"
+  });
+  
+  // 新增：是否使用TURN中继的状态
+  const [usingTurnRelay, setUsingTurnRelay] = useState(false);
 
   // 添加日志
   const addLog = useCallback((message, level = 'info') => {
@@ -176,6 +187,31 @@ export default function Room() {
             active: false,
             url: null,
             latency: null
+          });
+        }
+      });
+      
+      // 新增：获取TURN服务器信息
+      p2pConnection.onTURNServerChange((turnInfo) => {
+        if (turnInfo) {
+          setTurnServer({
+            active: turnInfo.active || false,
+            url: turnInfo.url,
+            latency: turnInfo.latency,
+            status: turnInfo.status || "未连接"
+          });
+          
+          if (turnInfo.active) {
+            addLog(`使用TURN服务器: ${turnInfo.url}${turnInfo.latency ? ` (延迟: ${turnInfo.latency}ms)` : ''}, 状态: ${turnInfo.status}`, 'info');
+          } else if (turnInfo.url) {
+            addLog(`TURN服务器准备就绪: ${turnInfo.url}${turnInfo.latency ? ` (延迟: ${turnInfo.latency}ms)` : ''}, 状态: ${turnInfo.status}`, 'info');
+          }
+        } else {
+          setTurnServer({
+            active: false,
+            url: null,
+            latency: null,
+            status: "未连接"
           });
         }
       });
@@ -461,6 +497,15 @@ export default function Room() {
     if (conn && conn.peer && !remotePeerId) {
       setRemotePeerId(conn.peer);
       addLog(`已获取对方ID: ${conn.peer}`, 'info');
+    }
+    
+    // 检查是否正在使用TURN中继
+    if (connectionRef.current && connectionRef.current.isUsingTurnRelay) {
+      const isTurnRelay = connectionRef.current.isUsingTurnRelay();
+      setUsingTurnRelay(isTurnRelay);
+      if (isTurnRelay) {
+        addLog(`连接通过TURN服务器中继建立`, 'info');
+      }
     }
     
     // 尝试获取对方IP信息
@@ -933,6 +978,8 @@ export default function Room() {
                 httpLatency={httpLatency}
                 p2pLatency={p2pLatency}
                 stunServer={stunServer}
+                turnServer={turnServer} // 新增TURN服务器状态
+                usingTurnRelay={usingTurnRelay} // 新增是否使用TURN中继
               />
             </motion.div>
 
