@@ -647,9 +647,9 @@ export default function Room() {
           }));
           
           // 每25%记录一次关键进度点
-          if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
-            addLog(`文件接收进度 ${data.fileName}: ${Math.floor(data.progress)}%`);
-          }
+          // if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
+          //   addLog(`文件接收进度 ${data.fileName}: ${Math.floor(data.progress)}%`);
+          // }
         }
         break;
       
@@ -747,8 +747,8 @@ export default function Room() {
     }
   };
 
-  // 发送文件
-  const handleSendFile = async (file) => {
+  // 发送文件 - 修改为接收文件ID参数
+  const handleSendFile = async (file, fileId) => {
     if (!connection || !connected) {
       addLog('无法发送文件: 未连接到对方', 'error');
       return false;
@@ -757,7 +757,8 @@ export default function Room() {
     addLog(`开始发送文件: ${file.name}`);
     
     try {
-      await connection.sendFile(file);
+      // 将文件ID传递给WebRTC连接
+      await connection.sendFile(file, fileId);
       return true;
     } catch (error) {
       addLog(`发送文件失败: ${error.message}`, 'error');
