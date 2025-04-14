@@ -302,7 +302,7 @@ export default function Room() {
     }
   };
 
-  // 修改 startPolling 函数，确保连接后真正停止轮询
+  // 修改 startPolling 函数，确保连接后真正暂停轮询
   const startPolling = (peerId, p2pConnection, isInitiator) => {
     // 防止重复启动轮询
     if (httpPollingActive || pollingId) {
@@ -332,23 +332,20 @@ export default function Room() {
     
   const interval = setInterval(async () => {
     try {
-      // 在每次轮询开始前，检查连接状态
-      // 更新内部连接状态引用以获取最新状态
-      connectionState.isConnected = connected;
-      
-      // 如果已经连接，立即停止轮询
+      // 关键修复点1: 在每次轮询开始前，先检查全局连接状态
       if (connectionState.isConnected || connected) {
+        // 如果已经连接，立即停止轮询并清除状态
         clearInterval(interval);
-        addLog(`P2P连接已建立，服务器轮询暂停`, 'info');
-        
-        // 完全重置轮询状态
+        addLog(`P2P连接已建立，服务器轮询停止`, 'info');
         setPollingId(null);
+        setHttpPollingActive(false); // 重置HTTP轮询状态
         return;
       }
       
       // 记录HTTP轮询开始时间
       const pollStartTime = Date.now();
       
+      // 如果还未连接，执行轮询
       const res = await fetch(`/api/signaling/poll?roomId=${roomId}&peerId=${peerId}`);
       const data = await res.json();
       
@@ -491,19 +488,20 @@ export default function Room() {
     }
   };
 
-  // 增强 handlePeerConnected 函数，确保连接建立时立即停止所有轮询
+  // 增强 handlePeerConnected 函数，确保连接后立即停止轮询
   const handlePeerConnected = (conn) => {
     addLog(`已与对方建立连接!`, 'success');
-    // 立即设置连接状态，防止轮询继续尝试连接
+    // 立即设置连接状态
     setConnected(true);
     setP2pConnectionActive(true);
     setDataChannelActive(true);
     
-    // 新增：连接建立时立即停止所有轮询
+    // 关键修复点2: 连接建立时立即主动停止轮询
     if (pollingId) {
-      addLog(`连接已建立，停止所有轮询`, 'info');
+      addLog(`连接已建立，停止服务器轮询`, 'info');
       clearInterval(pollingId);
       setPollingId(null);
+      setHttpPollingActive(false); // 明确重置HTTP轮询状态
     }
     
     // 确保远程PeerId在连接时被设置（加入对方ID）
