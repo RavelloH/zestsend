@@ -58,7 +58,10 @@ export default function ConnectionStatus({
           )}
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {description}
+          {/* 根据P2P连接状态动态修改HTTP轮询描述 */}
+          {title === "HTTP 轮询" && p2pConnection 
+            ? "P2P连接已建立，服务器轮询暂停" 
+            : description}
         </p>
       </div>
     </div>
