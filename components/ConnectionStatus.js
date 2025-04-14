@@ -61,7 +61,7 @@ export default function ConnectionStatus({
           )}
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          {/* 改进: 更新HTTP轮询和TURN服务器描述逻辑，确保显示准确 */}
+          {/* 改进: 更新状态文本显示逻辑，保持UI一致性 */}
           {title === "HTTP 轮询" ? 
             (p2pConnection ? "P2P连接已建立，服务器轮询暂停" : (httpPolling ? "服务器轮询正常" : "等待服务器连接...")) 
             : title === "TURN 服务器" && turnServer?.active && turnServer?.url

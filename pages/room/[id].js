@@ -513,37 +513,36 @@ export default function Room() {
     // 检查是否正在使用TURN中继
     if (connectionRef.current) {
       const isTurnRelay = connectionRef.current.isUsingTurnRelay();
-      setUsingTurnRelay(isTurnRelay);
       
-      if (isTurnRelay) {
-        addLog(`连接通过TURN服务器中继建立`, 'info');
+      // 只在状态变化时更新，防止重复设置触发不必要的渲染
+      if (isTurnRelay !== usingTurnRelay) {
+        setUsingTurnRelay(isTurnRelay);
         
-        // 更新TURN服务器状态为"已连接"
-        if (connectionRef.current.activeTurnServer) {
-          setTurnServer(prev => ({
-            ...prev,
-            active: true,
-            status: "已连接", // 明确显示为已连接
-            url: connectionRef.current.activeTurnServer.url,
-            latency: connectionRef.current.activeTurnServer.latency
-          }));
-        }
-        
-        // 主动同步TURN状态给对方，确保双方一致
-        setTimeout(() => {
-          if (connectionRef.current) {
-            try {
-              connectionRef.current.synchronizeTurnState();
-              
-              // 再发一次，确保对方收到
-              setTimeout(() => {
-                connectionRef.current.synchronizeTurnState();
-              }, 2000);
-            } catch (error) {
-              console.error("同步TURN状态失败:", error);
-            }
+        if (isTurnRelay) {
+          addLog(`连接通过TURN服务器中继建立`, 'info');
+          
+          // 更新TURN服务器状态为"已连接"
+          if (connectionRef.current.activeTurnServer) {
+            setTurnServer(prev => ({
+              ...prev,
+              active: true,
+              status: "已连接", // 明确显示为已连接
+              url: connectionRef.current.activeTurnServer.url,
+              latency: connectionRef.current.activeTurnServer.latency
+            }));
           }
-        }, 500);
+          
+          // 延迟一点时间再发送状态同步，确保连接稳定
+          setTimeout(() => {
+            if (connectionRef.current) {
+              try {
+                connectionRef.current.synchronizeTurnState();
+              } catch (error) {
+                console.error("同步TURN状态失败:", error);
+              }
+            }
+          }, 1000);
+        }
       }
     }
     
@@ -580,21 +579,29 @@ export default function Room() {
         break;
         
       case 'connection-info':
-        // 改进：处理连接信息，确保双方同步TURN状态
+        // 改进：处理连接信息，避免重复更新，只在状态变化时触发
         if (data.turnServer && data.turnServer.url) {
           // 无论对方是否指示他们使用TURN中继，都更新TURN服务器信息
-          setTurnServer(prev => ({
-            ...prev,
-            url: data.turnServer.url,
-            active: true,
-            status: "已连接",
-            latency: data.turnServer.latency || prev.latency
-          }));
+          setTurnServer(prev => {
+            // 只有当URL变化或状态从非活跃变为活跃时才更新，防止重复更新
+            if (prev.url !== data.turnServer.url || 
+                (!prev.active && data.turnServer.active)) {
+              return {
+                ...prev,
+                url: data.turnServer.url,
+                active: true,
+                status: "已连接",
+                latency: data.turnServer.latency || prev.latency
+              };
+            }
+            return prev;
+          });
         }
           
         // 如果对方指示正在使用TURN中继，则我们也应该显示为TURN中继
-        if (data.usingTurnRelay) {
+        if (data.usingTurnRelay && !usingTurnRelay) {
           setUsingTurnRelay(true);
+          // 避免重复日志，只在状态变化时记录
           addLog(`检测到连接通过TURN服务器中继`, 'info');
         }
         break;
