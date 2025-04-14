@@ -5,15 +5,37 @@ import 'leaflet/dist/leaflet.css';
 // 设置一个变量来存储Leaflet库的引用
 let L;
 
-// 用来使用动态中心点和缩放级别的组件
-function SetViewOnChange({ center, zoom }) {
+// 修改视图组件：添加对bounds的处理
+function SetViewOnChange({ center, zoom, bounds }) {
   const map = useMap();
   
   useEffect(() => {
-    if (center && zoom) {
+    if (bounds) {
+      // 使用bounds优先，这是自动包含所有标记点的边界
+      try {
+        // 为边界增加一些填充，确保点不会太靠近地图边缘
+        // 创建一个Leaflet的边界对象
+        const leafletBounds = L.latLngBounds(bounds);
+        
+        // 应用填充，确保点不会太贴近地图边缘
+        // 这里的数值是经纬度差值的百分比，根据实际情况调整
+        map.fitBounds(leafletBounds, {
+          padding: [30, 30], // 上下左右各添加30像素的填充
+          maxZoom: 10,       // 限制最大缩放级别，避免缩放过大
+          animate: true      // 平滑过渡
+        });
+      } catch (e) {
+        console.error('设置地图边界出错:', e);
+        // 出错时使用备用的center和zoom
+        if (center && zoom) {
+          map.setView(center, zoom);
+        }
+      }
+    } else if (center && zoom) {
+      // 如果没有bounds（单点情况），则使用center和zoom
       map.setView(center, zoom);
     }
-  }, [center, zoom, map]);
+  }, [center, zoom, bounds, map]);
   
   return null;
 }
@@ -43,7 +65,7 @@ function createIcon(color, L) {
   });
 }
 
-export default function LeafletMap({ center, zoom, ipInfo, peerIpInfo }) {
+export default function LeafletMap({ center, zoom, bounds, ipInfo, peerIpInfo }) {
   // 确保在客户端修复图标问题
   useEffect(() => {
     // 仅在客户端导入Leaflet
@@ -122,7 +144,7 @@ export default function LeafletMap({ center, zoom, ipInfo, peerIpInfo }) {
       
       <ZoomControl position="bottomright" />
       
-      <SetViewOnChange center={validCenter} zoom={validZoom} />
+      <SetViewOnChange center={validCenter} zoom={validZoom} bounds={bounds} />
       
       {markers.map((marker, index) => (
         <Marker 

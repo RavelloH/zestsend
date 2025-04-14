@@ -16,6 +16,7 @@ const MapWithNoSSR = dynamic(() => import('./LeafletMap'), {
 export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
   const [mapCenter, setMapCenter] = useState([0, 0]);
   const [mapZoom, setMapZoom] = useState(2);
+  const [bounds, setBounds] = useState(null); // 新增：地图边界状态
   const [isMounted, setIsMounted] = useState(false);
 
   // 确保只在客户端运行
@@ -28,7 +29,6 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
     
     // 计算地图中心和缩放级别
     if (ipInfo?.latitude && ipInfo?.longitude && peerIpInfo?.latitude && peerIpInfo?.longitude) {
-      // 两点之间的地图设置
       const lat1 = parseFloat(ipInfo.latitude);
       const lng1 = parseFloat(ipInfo.longitude);
       const lat2 = parseFloat(peerIpInfo.latitude);
@@ -39,6 +39,7 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
         // 如果坐标相同，就只聚焦一个点
         setMapCenter([lat1, lng1]);
         setMapZoom(10);
+        setBounds(null); // 单点不需要边界
         return;
       }
       
@@ -46,25 +47,39 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
       const centerLat = (lat1 + lat2) / 2;
       const centerLng = (lng1 + lng2) / 2;
       
-      // 计算适当的缩放级别
+      // 创建一个包含两点的边界数组，让Leaflet来自动计算最佳缩放级别
+      // 注意这里使用的是[[lat1, lng1], [lat2, lng2]]格式
+      const newBounds = [
+        [lat1, lng1],
+        [lat2, lng2]
+      ];
+      setBounds(newBounds);
+      
+      // 依然设置中心点作为备份
+      setMapCenter([centerLat, centerLng]);
+      
+      // 计算更保守的缩放级别作为备份
+      // 更保守的逻辑：对于大距离更小的缩放级别
       const latDiff = Math.abs(lat1 - lat2);
       const lngDiff = Math.abs(lng1 - lng2);
       const maxDiff = Math.max(latDiff, lngDiff);
       
-      let zoom = 2;
+      let zoom = 1; // 从最小缩放级别开始 - 更保守
       if (maxDiff < 1) zoom = 10;
       else if (maxDiff < 5) zoom = 8;
       else if (maxDiff < 20) zoom = 6;
-      else if (maxDiff < 60) zoom = 4;
-      else zoom = 2;
+      else if (maxDiff < 40) zoom = 4;
+      else if (maxDiff < 80) zoom = 3;
+      else if (maxDiff < 160) zoom = 2;
+      else zoom = 1; // 对于非常远的距离，使用1级缩放
       
-      setMapCenter([centerLat, centerLng]);
       setMapZoom(zoom);
     } 
     // 如果只有自己的IP信息
     else if (ipInfo?.latitude && ipInfo?.longitude) {
       setMapCenter([parseFloat(ipInfo.latitude), parseFloat(ipInfo.longitude)]);
       setMapZoom(10); // 单点显示时用更高的缩放级别
+      setBounds(null); // 单点不需要边界
     }
   }, [ipInfo, peerIpInfo, isMounted]);
 
@@ -91,6 +106,7 @@ export default function OpenStreetMap({ ipInfo, peerIpInfo, distance }) {
       <MapWithNoSSR 
         center={mapCenter} 
         zoom={mapZoom} 
+        bounds={bounds} // 传递边界给地图组件
         ipInfo={ipInfo}
         peerIpInfo={peerIpInfo}
       />
