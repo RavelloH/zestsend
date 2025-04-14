@@ -82,8 +82,8 @@ export default function Layout({ children }) {
                 rel="noopener noreferrer"
                 className="underline hover:text-indigo-600 dark:hover:text-indigo-400"
               >
-                GitHub 开源项目
-              </a>
+                GitHub:RavelloH/zestsend
+              </a>. Made by <a href="https://ravelloh.top/" target="_blank" rel="noopener noreferrer" className="underline hover:text-indigo-600 dark:hover:text-indigo-400">RavelloH</a>
             </p>
           </div>
         </footer>

@@ -60,7 +60,8 @@ export default function Room() {
   // 在现有的state声明部分添加stunServer状态
   const [stunServer, setStunServer] = useState({
     active: false,
-    url: null
+    url: null,
+    latency: null
   });
 
   // 添加日志
@@ -166,13 +167,15 @@ export default function Room() {
         if (stunInfo) {
           setStunServer({
             active: true,
-            url: stunInfo.url
+            url: stunInfo.url,
+            latency: stunInfo.latency // 添加延迟信息
           });
-          addLog(`使用STUN服务器: ${stunInfo.url}`, 'info');
+          addLog(`使用STUN服务器: ${stunInfo.url}${stunInfo.latency ? ` (延迟: ${stunInfo.latency}ms)` : ''}`, 'info');
         } else {
           setStunServer({
             active: false,
-            url: null
+            url: null,
+            latency: null
           });
         }
       });

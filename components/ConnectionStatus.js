@@ -92,6 +92,22 @@ export default function ConnectionStatus({
           httpPolling ? "服务器轮询正常" : "等待服务器连接...",
           httpLatency
         )}
+        {/* 新增STUN服务器状态显示，增加延迟参数 */}
+        {renderStatusIndicator(
+          "STUN 服务器",
+          stunServer?.active,
+          <FiGlobe
+            className={
+              stunServer?.active ? "text-green-500" : "text-yellow-500"
+            }
+          />,
+          stunServer?.active
+            ? stunServer.url
+              ? `使用: ${stunServer.url.replace("stun:", "")}`
+              : "连接正常"
+            : "未使用STUN服务器",
+          stunServer?.latency // 新增：传递STUN服务器延迟
+        )}
 
         {renderStatusIndicator(
           "P2P 连接",
@@ -110,22 +126,6 @@ export default function ConnectionStatus({
             className={dataChannel ? "text-green-500" : "text-yellow-500"}
           />,
           dataChannel ? "数据通道已就绪" : "等待数据通道准备..."
-        )}
-
-        {/* 新增STUN服务器状态显示 */}
-        {renderStatusIndicator(
-          "STUN 服务器",
-          stunServer?.active,
-          <FiGlobe
-            className={
-              stunServer?.active ? "text-green-500" : "text-yellow-500"
-            }
-          />,
-          stunServer?.active
-            ? stunServer.url
-              ? `使用: ${stunServer.url.replace("stun:", "")}`
-              : "连接正常"
-            : "未使用STUN服务器"
         )}
       </div>
 
