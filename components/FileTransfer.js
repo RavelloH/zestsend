@@ -16,6 +16,8 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
   // 新增: 添加远端进度状态
   const [remoteSendProgress, setRemoteSendProgress] = useState({});
   const [remoteReceiveProgress, setRemoteReceiveProgress] = useState({});
+  // 新增: 添加块大小状态
+  const [chunkSizes, setChunkSizes] = useState({});
   
   const fileInputRef = useRef(null);
   const sendQueueRef = useRef([]);
@@ -26,6 +28,8 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
   const stableTimeValuesRef = useRef({});
   const updateDebounceTimersRef = useRef({});
   const hasSetInitialTimeRef = useRef({});
+  // 新增: 记录块大小调整的时间，避免过于频繁调整
+  const lastChunkSizeAdjustmentRef = useRef({});
 
   // 修改: 更积极地显示时间的函数，减少"估计中..."的显示
   const formatTime = (seconds, isCompleted = false, progress = 0, fileId = null, type = 'unknown') => {
@@ -220,9 +224,22 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     const handleFileProgress = (event) => {
       if (event.detail && event.detail.fileId) {
         // 提取事件中的所有数据
-        const { fileId, fileName, progress, speed, remainingTime, isReceiving, sentBytes, totalBytes, status } = event.detail;
+        const { fileId, fileName, progress, speed, remainingTime, isReceiving, sentBytes, totalBytes, status, chunkSize } = event.detail;
         
         console.log('接收到文件进度更新:', event.detail);
+        
+        // 如果提供了块大小，更新块大小状态
+        if (chunkSize && !isNaN(chunkSize) && chunkSize > 0) {
+          setChunkSizes(prev => {
+            if (prev[fileId] !== chunkSize) {
+              return {
+                ...prev,
+                [fileId]: chunkSize
+              };
+            }
+            return prev;
+          });
+        }
         
         // 记录传输开始时间和进度历史
         if (!lastProgressUpdateRef.current[fileId]) {
@@ -359,7 +376,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     // 监听进度事件
     window.addEventListener('file-progress', handleFileProgress);
     
-    // 新增：监听接收方发回的进度反馈
+    // 新增：监听接收方发回的进度反馈 - 增加动态分块调整
     const handleReceiveProgress = (event) => {
       if (event.detail && event.detail.fileId) {
         const { fileId, fileName, progress, receivedBytes, totalBytes, speed } = event.detail;
@@ -383,6 +400,12 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             lastUpdate: Date.now()
           }
         }));
+        
+        // 动态调整块大小 - 比较本地发送进度和远程接收进度
+        const localProgress = fileProgress[fileId];
+        if (typeof localProgress === 'number' && typeof progress === 'number') {
+          adjustChunkSize(fileId, localProgress, progress);
+        }
       }
     };
     
@@ -416,6 +439,21 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       }
     };
     
+    // 新增：监听块大小变更事件
+    const handleChunkSizeChange = (event) => {
+      if (event.type === 'chunk-size-change' && event.fileId && event.chunkSize) {
+        console.log(`收到块大小变更通知: 文件${event.fileId}的块大小调整为${formatChunkSize(event.chunkSize)}`);
+        
+        setChunkSizes(prev => ({
+          ...prev,
+          [event.fileId]: event.chunkSize
+        }));
+      }
+    };
+    
+    // 新增：修改发送块大小变更事件监听器
+    window.addEventListener('chunk-size-change', handleChunkSizeChange);
+    
     // 监听接收进度反馈事件
     window.addEventListener('file-receive-progress', handleReceiveProgress);
     // 监听发送进度事件
@@ -426,13 +464,14 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       window.removeEventListener('file-progress', handleFileProgress);
       window.removeEventListener('file-receive-progress', handleReceiveProgress);
       window.removeEventListener('file-progress', handleSendProgress);
+      window.removeEventListener('chunk-size-change', handleChunkSizeChange);
       
       // 清理所有防抖定时器
       Object.values(updateDebounceTimersRef.current).forEach(timer => {
         if (timer) clearTimeout(timer);
       });
     };
-  }, [selectedFiles, receivedFiles, remainingTimes, transferSpeeds]);
+  }, [selectedFiles, receivedFiles, remainingTimes, transferSpeeds, fileProgress, chunkSizes]);
 
   // 显示收到的文件状态更多信息
   useEffect(() => {
@@ -546,8 +585,11 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         )
       );
       
-      // 启动文件发送并传递ID，方便WebRTC连接回传进度
-      const result = await onSendFile(fileObj.file, fileId);
+      // 获取当前块大小 - 可能已经被动态调整过
+      const currentChunkSize = chunkSizes[fileId] || 128 * 1024; // 默认128KB
+      
+      // 启动文件发送并传递ID和块大小
+      const result = await onSendFile(fileObj.file, fileId, currentChunkSize);
       
       // 关键修复：检查发送结果，如果返回false则表示发送失败
       if (result === false) {
@@ -601,17 +643,25 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         }
       }, 1000);
     }
-  }, [onSendFile]);
+  }, [onSendFile, chunkSizes]);
 
   const handleSendFile = useCallback((fileObj) => {
     // 将文件加入发送队列
     sendQueueRef.current.push(fileObj);
     
+    // 初始化此文件的块大小（如果尚未设置）
+    if (!chunkSizes[fileObj.id]) {
+      setChunkSizes(prev => ({
+        ...prev,
+        [fileObj.id]: 128 * 1024 // 默认128KB
+      }));
+    }
+    
     // 如果当前没有正在发送的文件，开始处理队列
     if (!currentlySendingRef.current) {
       processQueue();
     }
-  }, [processQueue]);
+  }, [processQueue, chunkSizes]);
 
   // 添加重试发送文件的函数
   const handleRetryFile = useCallback((fileObj) => {
@@ -781,6 +831,83 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     return 'normal';
   }
 
+  // 新增：格式化块大小的辅助函数
+  const formatChunkSize = (bytes) => {
+    if (!bytes || bytes <= 0) return "未知";
+    
+    if (bytes >= 1048576) { // 1MB
+      return `${(bytes / 1048576).toFixed(1)}MB/块`;
+    } else if (bytes >= 1024) { // 1KB
+      return `${Math.round(bytes / 1024)}KB/块`;
+    } else {
+      return `${bytes}B/块`;
+    }
+  };
+
+  // 动态调整块大小的函数
+  const adjustChunkSize = (fileId, localProgress, remoteProgress) => {
+    // 确保有本地进度和远程进度
+    if (typeof localProgress !== 'number' || typeof remoteProgress !== 'number') {
+      return;
+    }
+    
+    // 获取当前块大小
+    const currentChunkSize = chunkSizes[fileId] || 128 * 1024; // 默认128KB
+    
+    // 避免过于频繁调整
+    const now = Date.now();
+    const lastAdjustTime = lastChunkSizeAdjustmentRef.current[fileId] || 0;
+    if (now - lastAdjustTime < 2000) { // 至少2秒间隔
+      return;
+    }
+    
+    // 计算进度差异
+    const progressDiff = localProgress - remoteProgress;
+    
+    // 根据进度差异调整块大小
+    let newChunkSize = currentChunkSize;
+    
+    if (Math.abs(progressDiff) <= 5) {
+      // 如果进度差异小于5%，增大块大小
+      newChunkSize = Math.min(currentChunkSize * 2, 8 * 1024 * 1024); // 最大8MB
+      console.log(`文件${fileId}接收进度良好，增大块大小至${formatChunkSize(newChunkSize)}`);
+    } else if (progressDiff > 15) {
+      // 如果接收方进度落后超过15%，减小块大小
+      newChunkSize = Math.max(currentChunkSize / 2, 64 * 1024); // 最小64KB
+      console.log(`文件${fileId}接收进度滞后，减小块大小至${formatChunkSize(newChunkSize)}`);
+    }
+    
+    // 如果块大小发生变化，则更新状态
+    if (newChunkSize !== currentChunkSize) {
+      setChunkSizes(prev => ({
+        ...prev,
+        [fileId]: newChunkSize
+      }));
+      
+      lastChunkSizeAdjustmentRef.current[fileId] = now;
+      
+      // 将新的块大小发送到对方
+      notifyChunkSizeChange(fileId, newChunkSize);
+    }
+  };
+
+  // 通知对方块大小变更的函数
+  const notifyChunkSizeChange = (fileId, newChunkSize) => {
+    if (window.connection && window.connection.connection && window.connection.connection.open) {
+      try {
+        window.connection.connection.send({
+          type: 'chunk-size-change',
+          fileId: fileId,
+          chunkSize: newChunkSize,
+          timestamp: Date.now()
+        });
+        console.log(`已通知对方文件${fileId}的块大小变更为${formatChunkSize(newChunkSize)}`);
+      } catch (error) {
+        console.error('发送块大小变更通知失败:', error);
+      }
+    }
+  };
+
   // 修改渲染文件进度信息函数，使用接收方的速度而非发送速度
   const renderProgressInfo = (id, progress, status) => {
     const local_speed = transferSpeeds[id] || 0;
@@ -793,6 +920,9 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     
     // 关键修改: 使用接收方的速度替代发送速度
     const speed = hasRemoteProgress ? (remoteProgress.speed || local_speed) : local_speed;
+    
+    // 获取当前块大小
+    const chunkSize = chunkSizes[id] || 128 * 1024; // 默认128KB
     
     // 根据所有可用信息确定最佳时间显示
     let timeDisplay;
@@ -820,7 +950,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
           <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
             <div className="w-1/3 flex items-center">
               <FiTrendingUp className="mr-1 flex-shrink-0" />
-              <span className="truncate">{formatSpeed(speed)}</span>
+              <span className="truncate">{formatChunkSize(chunkSize)} - {formatSpeed(speed)}</span>
             </div>
             
             <div className="w-1/3 text-center font-medium">
@@ -880,6 +1010,9 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     const remoteSend = remoteSendProgress[file.id];
     const hasRemoteSend = remoteSend && typeof remoteSend.progress === 'number';
     
+    // 获取当前块大小
+    const chunkSize = chunkSizes[file.id] || 128 * 1024; // 默认128KB
+    
     // 确保进度是有效的数字值，并且始终显示任何大于0的值
     const safeProgress = typeof progress === 'number' && !isNaN(progress) ? 
       Math.max(0.1, progress) : 0.1; // 确保即使是0.1%也会显示
@@ -896,7 +1029,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
           <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
             <div className="w-1/3 flex items-center">
               <FiTrendingUp className="mr-1 flex-shrink-0" />
-              <span className="truncate">{formatSpeed(speed)}</span>
+              <span className="truncate">{formatChunkSize(chunkSize)} - {formatSpeed(speed)}</span>
             </div>
             
             <div className="w-1/3 text-center font-medium">

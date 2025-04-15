@@ -859,18 +859,18 @@ export default function Room() {
     }
   };
 
-  // 发送文件 - 修改为接收文件ID参数
-  const handleSendFile = async (file, fileId) => {
+  // 发送文件 - 修改为接收文件ID和块大小参数
+  const handleSendFile = async (file, fileId, chunkSize) => {
     if (!connection || !connected) {
       addLog('无法发送文件: 未连接到对方', 'error');
       return false;
     }
     
-    addLog(`开始发送文件: ${file.name}`);
+    addLog(`开始发送文件: ${file.name} (块大小: ${formatBytes(chunkSize || 128 * 1024)})`);
     
     try {
-      // 将文件ID传递给WebRTC连接
-      const result = await connection.sendFile(file, fileId);
+      // 将文件ID和块大小传递给WebRTC连接
+      const result = await connection.sendFile(file, fileId, chunkSize);
       // 发送完成后记录准确的速度
       if (result && result.speed) {
         addLog(`文件发送完成: ${file.name} (平均速度: ${result.speed.toFixed(2)} MB/s)`, 'success');
