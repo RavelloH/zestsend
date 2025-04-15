@@ -19,17 +19,103 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
   const currentlySendingRef = useRef(false);
   // 新增: 记录上次进度更新时间和大小的引用
   const lastProgressUpdateRef = useRef({});
+  // 新增: 添加稳定化计算的引用
+  const stableTimeValuesRef = useRef({});
+  const updateDebounceTimersRef = useRef({});
+  const hasSetInitialTimeRef = useRef({});
 
-  // 修改: 时间格式化函数，增加对传输完成的处理和错误值处理
-  const formatTime = (seconds, isCompleted = false) => {
-    // 确保seconds是有效的数值
+  // 修改: 更积极地显示时间的函数，减少"估计中..."的显示
+  const formatTime = (seconds, isCompleted = false, progress = 0, fileId = null, type = 'unknown') => {
+    // 如果是完成状态且有有效总用时
     if (isCompleted && typeof seconds === 'number' && !isNaN(seconds) && isFinite(seconds)) {
       return `总用时 ${formatTimeDuration(seconds)}`;
     }
-    if (!seconds || seconds === Infinity || isNaN(seconds) || seconds < 0) return '计算中...';
-    return formatTimeDuration(seconds);
+    
+    // 如果没有有效的时间值，但有进度和fileId，则主动计算估计时间
+    if ((!seconds || seconds === Infinity || isNaN(seconds)) && progress > 0 && fileId) {
+      // 基于传输速率和进度计算估计时间
+      const estimatedTime = estimateRemainingTime(fileId, progress, type);
+      if (estimatedTime && estimatedTime > 0) {
+        return formatTimeDuration(estimatedTime);
+      }
+      
+      // 只有在真的无法估计时才显示"估计中..."
+      if (progress > 15) { // 进度大于15%时，使用"预计很快完成"
+        return "即将完成...";
+      }
+    }
+    
+    // 如果有有效的时间值，直接显示
+    if (typeof seconds === 'number' && !isNaN(seconds) && isFinite(seconds) && seconds > 0) {
+      return formatTimeDuration(seconds);
+    }
+    
+    // 所有方法都失败时，显示"计算中..."
+    return '计算中...';
   };
   
+  // 新增: 根据传输历史估算剩余时间
+  const estimateRemainingTime = (fileId, progress, type) => {
+    if (!lastProgressUpdateRef.current[fileId]) return null;
+    
+    const history = lastProgressUpdateRef.current[fileId];
+    const now = Date.now();
+    const elapsedTime = (now - history.startTime) / 1000; // 已经过的秒数
+    
+    // 如果存在传输速度信息，使用速度来估算
+    const speed = type.includes('send') ? transferSpeeds[fileId] : transferSpeeds[fileId];
+    if (typeof speed === 'number' && speed > 0) {
+      // 查找对应文件的大小
+      let fileSize = 0;
+      if (type.includes('send')) {
+        const file = selectedFiles.find(f => f.id === fileId);
+        if (file && file.file) fileSize = file.file.size;
+      } else {
+        const file = receivedFiles.find(f => f.id === fileId);
+        if (file) fileSize = file.size || 0;
+      }
+      
+      if (fileSize > 0 && progress > 0) {
+        // 已传输的字节数
+        const bytesTransferred = (progress / 100) * fileSize;
+        // 剩余字节数
+        const bytesRemaining = fileSize - bytesTransferred;
+        // 根据当前速度估算剩余时间(秒)
+        return bytesRemaining / speed;
+      }
+    }
+    
+    // 根据进度历史估算
+    if (history.progressHistory && history.progressHistory.length >= 2) {
+      // 获取最近两次进度更新
+      const lastTwo = history.progressHistory.slice(-2);
+      const progressDiff = lastTwo[1].progress - lastTwo[0].progress;
+      const timeDiff = (lastTwo[1].time - lastTwo[0].time) / 1000; // 转为秒
+      
+      if (progressDiff > 0 && timeDiff > 0) {
+        // 计算每1%进度需要的时间
+        const timePerPercent = timeDiff / progressDiff;
+        // 剩余进度
+        const remainingProgress = 100 - progress;
+        // 估算剩余时间
+        return timePerPercent * remainingProgress;
+      }
+    }
+    
+    // 如果没有足够的历史数据，使用更简单的估算
+    if (progress > 0 && elapsedTime > 0) {
+      // 每1%进度所需的时间
+      const timePerPercent = elapsedTime / progress;
+      // 剩余进度
+      const remainingProgress = 100 - progress;
+      // 估算剩余时间
+      return timePerPercent * remainingProgress;
+    }
+    
+    // 无法估算
+    return null;
+  };
+
   // 修改: 格式化时间的辅助函数，增加错误处理
   const formatTimeDuration = (seconds) => {
     if (typeof seconds !== 'number' || isNaN(seconds) || !isFinite(seconds)) {
@@ -57,7 +143,75 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     return `${formatBytes(bytesPerSecond)}/s`;
   };
 
-  // 修改: 监听发送文件进度更新 - 增强处理接收方进度显示
+  // 增强稳定化时间值函数，更积极地显示有效时间
+  const getStableTimeValue = (fileId, newValue, type = 'remaining') => {
+    const key = `${fileId}-${type}`;
+    
+    // 如果是首次设置该文件的时间值，直接使用新值
+    if (!hasSetInitialTimeRef.current[key]) {
+      hasSetInitialTimeRef.current[key] = true;
+      stableTimeValuesRef.current[key] = newValue;
+      return newValue;
+    }
+    
+    // 如果新值无效但有稳定值，保持使用稳定值
+    if ((newValue === undefined || newValue === null || isNaN(newValue) || !isFinite(newValue)) && 
+        stableTimeValuesRef.current[key] !== undefined) {
+      return stableTimeValuesRef.current[key];
+    }
+    
+    // 如果新值有效，旧值无效或未设置，直接使用新值
+    if (typeof newValue === 'number' && isFinite(newValue) && newValue >= 0 &&
+        (!stableTimeValuesRef.current[key] || 
+         !isFinite(stableTimeValuesRef.current[key]) || 
+         stableTimeValuesRef.current[key] <= 0)) {
+      
+      stableTimeValuesRef.current[key] = newValue;
+      return newValue;
+    }
+    
+    // 清除之前的防抖定时器
+    if (updateDebounceTimersRef.current[key]) {
+      clearTimeout(updateDebounceTimersRef.current[key]);
+    }
+    
+    // 设置防抖 - 优化发送文件时的行为
+    const currentValue = stableTimeValuesRef.current[key];
+    
+    // 针对发送文件改进判断逻辑
+    if (type.includes('send')) {
+      // 发送文件时更积极地接受有效值
+      if (typeof newValue === 'number' && isFinite(newValue) && newValue > 0) {
+        // 如果旧值无效或者变化不是太大，立即采纳新值
+        if (!currentValue || !isFinite(currentValue) || currentValue <= 0 || 
+            Math.abs(newValue - currentValue) / currentValue < 0.8) {
+          stableTimeValuesRef.current[key] = newValue;
+          return newValue;
+        }
+      }
+    }
+    
+    // 通用变化检测逻辑
+    const changeRatio = currentValue ? Math.abs(newValue - currentValue) / currentValue : 1;
+    
+    if (changeRatio > 0.5 || currentValue === undefined) {
+      // 变化大，立即更新
+      stableTimeValuesRef.current[key] = newValue;
+      return newValue;
+    } else {
+      // 小变化，保持原值，同时开始防抖定时器
+      // 缩短发送文件时的防抖时间
+      const debounceTime = type.includes('send') ? 500 : 1000;
+      
+      updateDebounceTimersRef.current[key] = setTimeout(() => {
+        stableTimeValuesRef.current[key] = newValue;
+      }, debounceTime);
+      
+      return currentValue;
+    }
+  };
+
+  // 修改: 监听发送文件进度更新 - 增强历史记录以便更好估算时间
   useEffect(() => {
     // 添加全局事件监听器接收进度更新
     const handleFileProgress = (event) => {
@@ -67,16 +221,31 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         
         console.log('接收到文件进度更新:', event.detail);
         
-        // 记录传输开始时间，用于计算总时间
+        // 记录传输开始时间和进度历史
         if (!lastProgressUpdateRef.current[fileId]) {
           lastProgressUpdateRef.current[fileId] = { 
             time: Date.now(),
             size: 0,
-            startTime: Date.now() // 添加开始时间
+            startTime: Date.now(),
+            lastValidTime: null,
+            progressHistory: [] // 增加进度历史跟踪
           };
         }
         
-        // 更新进度
+        // 更新进度历史，用于后续估算
+        if (progress !== undefined) {
+          const entry = { progress, time: Date.now(), speed };
+          // 最多保留10个历史进度点，防止占用太多内存
+          const history = lastProgressUpdateRef.current[fileId].progressHistory || [];
+          if (history.length >= 10) {
+            // 删除较早的历史记录，保留最新的
+            history.shift();
+          }
+          history.push(entry);
+          lastProgressUpdateRef.current[fileId].progressHistory = history;
+        }
+        
+        // 更新进度 - 区分接收和发送，防止状态混淆
         if (isReceiving) {
           // 接收方进度更新 - 立即显示进度
           setDownloadProgress(prev => ({
@@ -92,52 +261,92 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             }));
           }
           
-          // 更新剩余时间，注意处理完成状态
-          // 如果已完成，计算总用时；否则使用剩余时间
-          const calculatedTime = progress >= 99.9 
-            ? (Date.now() - (lastProgressUpdateRef.current[fileId]?.startTime || Date.now())) / 1000
-            : remainingTime;
-            
-          setRemainingTimes(prev => {
-            // 确保不设置无效值，这可能导致显示问题
-            const newTime = (typeof calculatedTime === 'number' && !isNaN(calculatedTime)) 
-              ? calculatedTime 
-              : prev[fileId] || Infinity;
-              
-            return {
-              ...prev,
-              [fileId]: newTime
-            };
-          });
+          // 更新剩余时间，使用稳定值处理
+          let timeValue;
+          
+          if (progress >= 99.9) {
+            // 完成状态：计算总用时
+            timeValue = (Date.now() - (lastProgressUpdateRef.current[fileId]?.startTime || Date.now())) / 1000;
+          } else {
+            // 进行中：使用服务器提供的剩余时间或保持当前值
+            timeValue = typeof remainingTime === 'number' && !isNaN(remainingTime) && isFinite(remainingTime) 
+              ? remainingTime 
+              : remainingTimes[fileId];
+          }
+          
+          // 应用稳定化函数
+          const stableTime = getStableTimeValue(fileId, timeValue, 'download-remaining');
+          
+          setRemainingTimes(prev => ({
+            ...prev,
+            [fileId]: stableTime
+          }));
+          
         } else {
-          // 发送方逻辑 - 发送进度更新
+          // 发送方处理 - 优化时间估算逻辑
           setFileProgress(prev => ({
             ...prev,
             [fileId]: progress || 0
           }));
           
-          // 如果事件中包含速度，直接使用它
+          // 更新速度信息
           if (typeof speed === 'number' && speed > 0) {
             setTransferSpeeds(prev => ({
               ...prev,
               [fileId]: speed
             }));
-          }
-          
-          // 如果事件中包含剩余时间，直接使用它，并确保进行有效性检查
-          let timeToUse = remainingTime;
-          if (progress >= 99.9) {
-            const startTime = lastProgressUpdateRef.current[fileId]?.startTime;
-            if (startTime) {
-              timeToUse = (Date.now() - startTime) / 1000;
+          } else if (progress > 0) {
+            // 如果没有提供速度，尝试计算速度
+            const history = lastProgressUpdateRef.current[fileId].progressHistory;
+            if (history && history.length >= 2) {
+              const lastTwo = history.slice(-2);
+              const progressDiff = lastTwo[1].progress - lastTwo[0].progress;
+              const timeDiff = (lastTwo[1].time - lastTwo[0].time) / 1000; // 转为秒
+              
+              if (progressDiff > 0 && timeDiff > 0) {
+                // 找到对应的文件对象获取大小
+                const fileObj = selectedFiles.find(f => f.id === fileId);
+                if (fileObj && fileObj.file) {
+                  const fileSize = fileObj.file.size;
+                  // 计算传输速度 (字节/秒)
+                  const bytesTransferred = (progressDiff / 100) * fileSize;
+                  const calculatedSpeed = bytesTransferred / timeDiff;
+                  
+                  setTransferSpeeds(prev => ({
+                    ...prev,
+                    [fileId]: calculatedSpeed
+                  }));
+                }
+              }
             }
           }
           
-          // 确保时间值有效
-          if (typeof timeToUse === 'number' && !isNaN(timeToUse)) {
+          // 优化时间处理：更积极地估算和显示时间
+          let timeValue;
+          
+          if (progress >= 99.9) {
+            // 完成时显示总用时
+            timeValue = (Date.now() - (lastProgressUpdateRef.current[fileId]?.startTime || Date.now())) / 1000;
+          } else if (typeof remainingTime === 'number' && isFinite(remainingTime) && remainingTime > 0) {
+            // 有效的剩余时间直接使用
+            timeValue = remainingTime;
+            lastProgressUpdateRef.current[fileId].lastValidTime = remainingTime;
+          } else if (lastProgressUpdateRef.current[fileId].lastValidTime) {
+            // 使用最后有效时间并基于经过时间调整
+            const lastValid = lastProgressUpdateRef.current[fileId].lastValidTime;
+            const elapsed = (Date.now() - lastProgressUpdateRef.current[fileId].time) / 1000;
+            timeValue = Math.max(1, lastValid - elapsed); 
+            lastProgressUpdateRef.current[fileId].time = Date.now();
+          } else {
+            // 全新估算 - 即使没有有效时间，也尝试提供估计
+            timeValue = estimateRemainingTime(fileId, progress, 'send');
+          }
+          
+          // 只在值有实质变化时才更新状态，减少不必要的渲染
+          if (timeValue !== remainingTimes[fileId]) {
             setRemainingTimes(prev => ({
               ...prev,
-              [fileId]: timeToUse
+              [fileId]: timeValue
             }));
           }
         }
@@ -150,8 +359,13 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     // 清理函数
     return () => {
       window.removeEventListener('file-progress', handleFileProgress);
+      
+      // 清理所有防抖定时器
+      Object.values(updateDebounceTimersRef.current).forEach(timer => {
+        if (timer) clearTimeout(timer);
+      });
     };
-  }, [selectedFiles, receivedFiles]);
+  }, [selectedFiles, receivedFiles, remainingTimes, transferSpeeds]); // 注意依赖项列表添加了transferSpeeds
 
   // 显示收到的文件状态更多信息
   useEffect(() => {
@@ -403,11 +617,25 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     }
   };
 
-  // 修改渲染文件进度信息函数，确保暗色模式适配
+  // 修改渲染文件进度信息函数，更积极地显示时间
   const renderProgressInfo = (id, progress, status) => {
     const speed = transferSpeeds[id] || 0;
-    const remaining = remainingTimes[id] || Infinity;
+    const remaining = remainingTimes[id];
     const isCompleted = progress >= 100;
+    
+    // 根据所有可用信息确定最佳时间显示
+    let timeDisplay;
+    
+    if (isCompleted) {
+      // 完成状态
+      timeDisplay = formatTime(remaining, true, progress, id, 'send');
+    } else if (typeof remaining === 'number' && isFinite(remaining) && remaining > 0) {
+      // 有剩余时间
+      timeDisplay = formatTimeDuration(remaining);
+    } else {
+      // 尝试估算
+      timeDisplay = formatTime(null, false, progress, id, 'send');
+    }
     
     return (
       <div className="mt-1">
@@ -416,7 +644,6 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
           status={status === 'failed' ? 'error' : (status === 'sent' ? 'success' : 'normal')}
         />
         
-        {/* 修改: 使用固定宽度容器和flexbox确保布局稳定 */}
         <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
           <div className="w-1/3 flex items-center">
             <FiTrendingUp className="mr-1 flex-shrink-0" />
@@ -427,7 +654,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
           
           <div className="w-1/3 flex items-center justify-end">
             <FiClock className="mr-1 flex-shrink-0" />
-            <span className="truncate">{formatTime(remaining, isCompleted)}</span>
+            <span className="truncate">{timeDisplay}</span>
           </div>
         </div>
       </div>
@@ -615,7 +842,10 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                         <div className="w-1/3 flex items-center justify-end">
                           <FiClock className="mr-1 flex-shrink-0" />
                           <span className="truncate">
-                            {formatTime(remainingTimes[file.id], downloadProgress[file.id] >= 100)}
+                            {formatTime(
+                              typeof remainingTimes[file.id] === 'number' ? remainingTimes[file.id] : null,
+                              downloadProgress[file.id] >= 100
+                            )}
                           </span>
                         </div>
                       </div>
