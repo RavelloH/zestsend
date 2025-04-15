@@ -374,6 +374,33 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     }
   }, [receivedFiles]);
 
+  // 新增：监听连接断开事件
+  useEffect(() => {
+    // 处理连接断开事件
+    const handleConnectionClose = () => {
+      console.log('检测到连接断开事件，正在更新文件状态...');
+      
+      // 找出所有正在发送中的文件并将其状态设为失败
+      setSelectedFiles(prev => 
+        prev.map(f => 
+          f.status === 'sending' ? { ...f, status: 'failed', errorMessage: '连接已断开' } : f
+        )
+      );
+      
+      // 重置发送状态
+      setSending({});
+      currentlySendingRef.current = false;
+      setInProgress(false);
+    };
+    
+    // 监听自定义连接断开事件
+    window.addEventListener('p2p-connection-closed', handleConnectionClose);
+    
+    return () => {
+      window.removeEventListener('p2p-connection-closed', handleConnectionClose);
+    };
+  }, []);
+
   const onDrop = useCallback(acceptedFiles => {
     // 过滤掉空文件或零字节文件
     const validFiles = acceptedFiles.filter(file => file && file.size > 0);
@@ -405,7 +432,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     open(); // 打开文件选择器对话框
   };
 
-  // 处理发送队列 - 添加ID标识修复
+  // 处理发送队列 - 修复连接断开问题
   const processQueue = useCallback(async () => {
     if (currentlySendingRef.current || sendQueueRef.current.length === 0) {
       return;
@@ -414,17 +441,18 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     currentlySendingRef.current = true;
     setInProgress(true);
     
+    // 记录当前正在发送的文件ID，便于后续错误处理
+    const fileObj = sendQueueRef.current.shift();
+    if (!fileObj) {
+      currentlySendingRef.current = false;
+      setInProgress(false);
+      return;
+    }
+    
+    // 确保ID在状态更新前被记录下来
+    const fileId = fileObj.id;
+    
     try {
-      const fileObj = sendQueueRef.current.shift();
-      if (!fileObj) {
-        currentlySendingRef.current = false;
-        setInProgress(false);
-        return;
-      }
-      
-      // 确保ID在状态更新前被记录下来
-      const fileId = fileObj.id;
-      
       setSending(prev => ({ ...prev, [fileId]: true }));
       
       // 初始化进度
@@ -447,33 +475,55 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       // 更新状态为发送中
       setSelectedFiles(prev => 
         prev.map(f => 
-          f.id === fileId ? { ...f, status: 'sending' } : f
+          f.id === fileId ? { ...f, status: 'sending', errorMessage: null } : f
         )
       );
       
       // 启动文件发送并传递ID，方便WebRTC连接回传进度
-      await onSendFile(fileObj.file, fileId);
+      const result = await onSendFile(fileObj.file, fileId);
       
-      // 更新状态为已发送
-      setSelectedFiles(prev => 
-        prev.map(f => 
-          f.id === fileId ? { ...f, status: 'sent', progress: 100 } : f
-        )
-      );
-    } catch (error) {
-      console.error('File sending error:', error);
-      // 如果有文件正在发送，更新其状态为失败
-      if (sendQueueRef.current.length > 0) {
-        const failedFile = sendQueueRef.current[0];
+      // 关键修复：检查发送结果，如果返回false则表示发送失败
+      if (result === false) {
+        console.log('文件发送失败，设置状态为失败:', fileObj.file.name);
         setSelectedFiles(prev => 
           prev.map(f => 
-            f.id === failedFile.id ? { ...f, status: 'failed' } : f
+            f.id === fileId ? { ...f, status: 'failed', errorMessage: '未连接到对方' } : f
           )
         );
+        return;
       }
+      
+      // 更新状态为已发送 - 只有在确认成功发送后才更新
+      if (fileObj && fileObj.id) {
+        setSelectedFiles(prev => {
+          const updatedFiles = prev.map(f => {
+            // 只有仍处于发送中状态的文件才更新为已发送
+            // 这防止覆盖可能已经被连接断开事件设置为失败的状态
+            if (f.id === fileId && f.status === 'sending') {
+              return { ...f, status: 'sent', progress: 100, errorMessage: null };
+            }
+            return f;
+          });
+          return updatedFiles;
+        });
+      }
+    } catch (error) {
+      console.error('File sending error:', error);
+      
+      // 更新当前发送失败的文件状态，并添加错误信息
+      setSelectedFiles(prev => 
+        prev.map(f => 
+          f.id === fileId ? { ...f, status: 'failed', errorMessage: error.message || '发送过程中出错' } : f
+        )
+      );
     } finally {
       setTimeout(() => {
-        setSending({});
+        setSending(prev => {
+          const newSending = {...prev};
+          delete newSending[fileId]; // 确保清除特定文件的发送状态
+          return newSending;
+        });
+        
         currentlySendingRef.current = false;
         
         // 处理队列中的下一个文件
@@ -495,6 +545,39 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       processQueue();
     }
   }, [processQueue]);
+
+  // 添加重试发送文件的函数
+  const handleRetryFile = useCallback((fileObj) => {
+    // 先将文件状态重置为 ready
+    setSelectedFiles(prev => 
+      prev.map(f => 
+        f.id === fileObj.id ? { ...f, status: 'ready', progress: 0, errorMessage: null } : f
+      )
+    );
+    
+    // 清除原有进度数据
+    setFileProgress(prev => {
+      const newProgress = { ...prev };
+      delete newProgress[fileObj.id];
+      return newProgress;
+    });
+    
+    // 重置时间和速度数据
+    setTransferSpeeds(prev => ({
+      ...prev,
+      [fileObj.id]: 0
+    }));
+    
+    setRemainingTimes(prev => ({
+      ...prev,
+      [fileObj.id]: Infinity
+    }));
+    
+    // 短暂延迟后开始发送
+    setTimeout(() => {
+      handleSendFile(fileObj);
+    }, 100);
+  }, [handleSendFile]);
 
   const removeFile = (id) => {
     // 如果文件在队列中，从队列中移除
@@ -722,7 +805,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                 >
                   <div className="flex items-center mb-2">
                     <div className="text-2xl mr-3">
-                      <FiFile className="text-indigo-500" />
+                      <FiFile className={fileObj.status === 'failed' ? "text-red-500" : "text-indigo-500"} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{fileObj.file.name}</p>
@@ -735,9 +818,17 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                           {fileObj.status === 'failed' && <FiX className="mr-1" />}
                           {fileObj.status === 'sending' && <FiLoader className="mr-1 animate-spin" />}
                           {getStatusText(fileObj.status)}
+                          {/* 显示失败原因 */}
+                          {fileObj.status === 'failed' && fileObj.errorMessage && (
+                            <span className="ml-1">
+                              : {fileObj.errorMessage}
+                            </span>
+                          )}
                         </p>
                       )}
                     </div>
+                    
+                    {/* 发送按钮 (只在ready状态显示) */}
                     {fileObj.status === 'ready' && (
                       <button
                         onClick={() => handleSendFile(fileObj)}
@@ -748,6 +839,19 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                         {sending[fileObj.id] ? '发送中...' : '发送'}
                       </button>
                     )}
+
+                    {/* 重试按钮 (只在failed状态显示) */}
+                    {fileObj.status === 'failed' && (
+                      <button
+                        onClick={() => handleRetryFile(fileObj)}
+                        className="ml-2 px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors flex items-center"
+                        data-umami-event="重试发送文件"
+                      >
+                        <span>重试</span>
+                      </button>
+                    )}
+                    
+                    {/* 删除按钮 (不在sending状态显示) */}
                     {fileObj.status !== 'sending' && (
                       <button
                         onClick={() => removeFile(fileObj.id)}
@@ -759,9 +863,9 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                     )}
                   </div>
                   
-                  {/* 显示进度条 - 修复为确保始终显示 */}
-                  {(fileObj.status === 'sending' || fileProgress[fileObj.id] > 0) && 
-                    renderProgressInfo(fileObj.id, fileProgress[fileObj.id], fileObj.status)
+                  {/* 显示进度条 - 修复为确保始终显示，包括失败状态 */}
+                  {(fileObj.status === 'sending' || fileObj.status === 'failed' || fileProgress[fileObj.id] > 0) && 
+                    renderProgressInfo(fileObj.id, fileObj.status === 'failed' ? (fileProgress[fileObj.id] || 100) : fileProgress[fileObj.id], fileObj.status)
                   }
                 </motion.div>
               ))}

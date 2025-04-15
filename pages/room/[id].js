@@ -768,6 +768,9 @@ export default function Room() {
     setDataChannelActive(false);
     setP2pLatency(null); // 重置P2P延迟
     
+    // 触发自定义事件，通知文件传输组件连接已断开
+    window.dispatchEvent(new CustomEvent('p2p-connection-closed'));
+    
     // 停止延迟测量
     if (connectionRef.current) {
       connectionRef.current.stopLatencyMeasurement();
