@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { FaSun, FaMoon, FaGithub } from 'react-icons/fa';
 import { motion } from 'framer-motion';
 import ThemeWrapper from './ThemeWrapper';
+import Script from 'next/script'; // 导入Script组件
 
 export default function Layout({ children }) {
   const { theme, setTheme } = useTheme();
@@ -27,13 +28,16 @@ export default function Layout({ children }) {
           <title>ZestSend - P2P文件传输</title>
           <meta name="description" content="安全、私密的P2P文件传输" />
           <link rel="icon" href="/favicon.ico" />
-          {/* 添加 Umami 分析跟踪代码 */}
-          <script 
-            defer 
-            src="https://analytics.ravelloh.top/script.js" 
-            data-website-id="3bf45934-11bf-43d1-81c6-c5e418b7e6f8"
-          ></script>
+          {/* 移除Umami分析跟踪代码，改为使用Script组件 */}
         </Head>
+
+        {/* 添加Script组件加载Umami分析代码，使用策略防止重复加载 */}
+        <Script
+          id="umami-analytics" // 给脚本一个唯一ID，防止重复注入
+          strategy="afterInteractive" // 页面可交互后再加载此脚本
+          src="https://analytics.ravelloh.top/script.js"
+          data-website-id="3bf45934-11bf-43d1-81c6-c5e418b7e6f8"
+        />
 
         <header className="sticky top-0 backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700"
         style={{ zIndex: 3000 }}>
