@@ -330,7 +330,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     });
   };
 
-  // 处理下载逻辑增强，添加下载速度计算
+  // 修改下载文件函数，移除模拟进度条
   const downloadFile = (file) => {
     console.log('准备下载文件:', file);
     
@@ -347,13 +347,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     }
     
     try {
-      // 设置下载进度为0，开始下载
-      setDownloadProgress(prev => ({
-        ...prev,
-        [file.id]: 0
-      }));
-      
-      // 添加数据有效性检查
+      // 检查文件数据有效性
       if (!(file.data instanceof Blob)) {
         console.error('文件数据不是Blob类型:', typeof file.data);
         
@@ -367,12 +361,6 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         } catch (blobError) {
           console.error('转换为Blob失败:', blobError);
           alert('文件数据格式错误，无法下载');
-          
-          setDownloadProgress(prev => {
-            const newProgress = { ...prev };
-            delete newProgress[file.id];
-            return newProgress;
-          });
           return;
         }
       }
@@ -381,114 +369,35 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       if (file.data.size === 0) {
         console.error('文件Blob大小为0');
         alert('文件为空（0字节），无法下载');
-        
-        setDownloadProgress(prev => {
-          const newProgress = { ...prev };
-          delete newProgress[file.id];
-          return newProgress;
-        });
         return;
       }
       
-      // 创建blob URL
+      // 创建blob URL直接触发下载，不再模拟进度条
       const url = URL.createObjectURL(file.data);
       console.log('文件Blob URL创建成功，大小:', file.data.size, '字节');
       
-      // 记录下载开始时间，用于计算下载速度
-      const startTime = Date.now();
-      const totalSize = file.size;
+      // 执行下载
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
       
-      // 模拟下载进度更快速一些
-      let progress = 0;
-      const interval = setInterval(() => {
-        progress += 20;
-        const currentProgress = progress > 100 ? 100 : progress;
-        
-        setDownloadProgress(prev => ({
-          ...prev,
-          [file.id]: currentProgress
-        }));
-        
-        // 计算下载速度和剩余时间
-        const now = Date.now();
-        const elapsedSeconds = (now - startTime) / 1000;
-        if (elapsedSeconds > 0) {
-          // 估算下载速度 (字节/秒)
-          const downloadedSize = (currentProgress / 100) * totalSize;
-          const speed = downloadedSize / elapsedSeconds;
-          
-          // 估算剩余时间 (秒)
-          const remaining = (totalSize - downloadedSize) / (speed > 0 ? speed : 1);
-          
-          // 更新速度和剩余时间
-          setTransferSpeeds(prev => ({
-            ...prev,
-            [file.id]: speed
-          }));
-          
-          setRemainingTimes(prev => ({
-            ...prev,
-            [file.id]: currentProgress >= 100 ? 0 : remaining
-          }));
-        }
-        
-        if (progress >= 100) {
-          clearInterval(interval);
-          
-          // 执行实际下载
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = file.name;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          console.log('文件下载已触发:', file.name);
-          
-          // 计算总下载时间
-          const totalTime = (Date.now() - startTime) / 1000;
-          
-          // 更新为显示总时间
-          setRemainingTimes(prev => ({
-            ...prev,
-            [file.id]: totalTime
-          }));
-          
-          // 下载完成后延迟清除进度、速度和剩余时间
-          setTimeout(() => {
-            setDownloadProgress(prev => {
-              const newProgress = { ...prev };
-              delete newProgress[file.id];
-              return newProgress;
-            });
-            
-            setTransferSpeeds(prev => {
-              const newSpeeds = { ...prev };
-              delete newSpeeds[file.id];
-              return newSpeeds;
-            });
-            
-            setRemainingTimes(prev => {
-              const newTimes = { ...prev };
-              delete newTimes[file.id];
-              return newTimes;
-            });
-          }, 2000);
-        }
-      }, 50); // 更快的进度更新，让体验更流畅
+      // 释放URL对象
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+      }, 100);
+      
+      console.log('文件下载已触发:', file.name);
+      
     } catch (error) {
       console.error('File download error:', error);
       alert(`文件下载失败: ${error.message}`);
-      
-      setDownloadProgress(prev => {
-        const newProgress = { ...prev };
-        delete newProgress[file.id];
-        return newProgress;
-      });
     }
   };
 
-  // 进度条组件
+  // 修改进度条组件，确保正确应用暗色模式
   const ProgressBar = ({ progress, className = "", status = "normal" }) => {
     // 根据状态选择颜色
     const getColorClass = () => {
@@ -530,7 +439,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     }
   };
 
-  // 修改: 渲染文件进度信息函数，增加完成状态的判断
+  // 修改渲染文件进度信息函数，确保暗色模式适配
   const renderProgressInfo = (id, progress, status) => {
     const speed = transferSpeeds[id] || 0;
     const remaining = remainingTimes[id] || Infinity;
@@ -544,7 +453,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         />
         
         {/* 修改: 使用固定宽度容器和flexbox确保布局稳定 */}
-        <div className="flex justify-between text-xs text-gray-500 mt-1">
+        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
           <div className="w-1/3 flex items-center">
             <FiTrendingUp className="mr-1 flex-shrink-0" />
             <span className="truncate">{formatSpeed(speed)}</span>
@@ -670,10 +579,10 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         </div>
       )}
 
-      {/* 接收的文件列表 - 同样确保显示进度和时间 */}
+      {/* 接收的文件列表 - 修复CSS类名并确保暗色模式适配 */}
       {receivedFiles.length > 0 && (
         <div className="mt-4">
-          <h3 className="text-lg font-medium mb-2 flex items中心 justify-between">
+          <h3 className="text-lg font-medium mb-2 flex items-center justify-between">
             <span>已接收文件</span>
             <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-300 px-2 py-1 rounded-full">
               {receivedFiles.length} 个文件
@@ -688,7 +597,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, height: 0, marginBottom: 0 }}
                   transition={{ duration: 0.2 }}
-                  className="bg-white dark:bg灰色-800 rounded-lg shadow p-3 flex flex-col"
+                  className="bg-white dark:bg-gray-800 rounded-lg shadow p-3 flex flex-col"
                 >
                   <div className="flex items-center mb-2">
                     <div className="text-2xl mr-3">
@@ -707,7 +616,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                     </div>
                     <button
                       onClick={() => downloadFile(file)}
-                      disabled={!file.data || (downloadProgress[file.id] > 0 && downloadProgress[file.id] < 100)}
+                      disabled={!file.data}
                       className="ml-2 px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
                       data-umami-event="下载文件"
                     >
@@ -721,8 +630,8 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                     <div className="mt-1">
                       <ProgressBar progress={downloadProgress[file.id]} status="success" />
                       
-                      {/* 修改: 使用固定宽度布局 */}
-                      <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      {/* 修改: 使用固定宽度布局和正确的暗色模式类 */}
+                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
                         <div className="w-1/3 flex items-center">
                           <FiTrendingUp className="mr-1 flex-shrink-0" />
                           <span className="truncate">{formatSpeed(transferSpeeds[file.id])}</span>
