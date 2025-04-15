@@ -632,8 +632,20 @@ export default function Room() {
         
       case 'file-start':
         addLog(`对方开始发送文件: ${data.fileName}`);
-        break;
         
+        // 新增：分发自定义进度事件到全局，初始进度为0
+        window.dispatchEvent(new CustomEvent('file-progress', { 
+          detail: {
+            fileId: data.fileId,
+            fileName: data.fileName,
+            progress: 0,
+            speed: 0,
+            remainingTime: Infinity,
+            isReceiving: true
+          }
+        }));
+        break;
+      
       case 'file-progress':
         // 增强进度事件处理
         if (data.progress > 0) {
@@ -642,17 +654,14 @@ export default function Room() {
             detail: {
               fileId: data.fileId,
               fileName: data.fileName,
-              progress: data.progress
+              progress: data.progress,
+              speed: data.speed,
+              remainingTime: data.remainingTime
             }
           }));
-          
-          // 每25%记录一次关键进度点
-          // if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
-          //   addLog(`文件接收进度 ${data.fileName}: ${Math.floor(data.progress)}%`);
-          // }
         }
         break;
-      
+        
       case 'file-complete':
         // 确保文件有效且包含数据
         if (data.fileData && (data.fileData instanceof Blob) && data.fileData.size > 0) {
@@ -672,6 +681,30 @@ export default function Room() {
         } else {
           addLog(`文件接收失败: ${data.fileName} - 无效的文件数据`, 'error');
           console.error('文件数据无效:', data);
+        }
+        break;
+        
+      case 'file-transfer-progress':
+        // 添加对文件传输进度的处理 - 从发送方同步来的进度信息
+        if (data.progress > 0) {
+          // 分发接收进度事件
+          window.dispatchEvent(new CustomEvent('file-progress', { 
+            detail: {
+              fileId: data.fileId,
+              fileName: data.fileName,
+              progress: data.progress,
+              speed: data.speed,
+              remainingTime: data.remainingTime,
+              isReceiving: true,
+              sentBytes: data.sentBytes,
+              totalBytes: data.totalBytes
+            }
+          }));
+          
+          // 每25%记录一次关键进度点
+          // if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
+          //   addLog(`文件接收进度 ${data.fileName}: ${Math.floor(data.progress)}%`);
+          // }
         }
         break;
       
@@ -758,7 +791,11 @@ export default function Room() {
     
     try {
       // 将文件ID传递给WebRTC连接
-      await connection.sendFile(file, fileId);
+      const result = await connection.sendFile(file, fileId);
+      // 发送完成后记录准确的速度
+      if (result && result.speed) {
+        addLog(`文件发送完成: ${file.name} (平均速度: ${result.speed.toFixed(2)} MB/s)`, 'success');
+      }
       return true;
     } catch (error) {
       addLog(`发送文件失败: ${error.message}`, 'error');
