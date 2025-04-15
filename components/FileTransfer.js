@@ -362,22 +362,24 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     // 新增：监听接收方发回的进度反馈
     const handleReceiveProgress = (event) => {
       if (event.detail && event.detail.fileId) {
-        const { fileId, fileName, progress, receivedBytes, totalBytes } = event.detail;
+        const { fileId, fileName, progress, receivedBytes, totalBytes, speed } = event.detail;
         
         // 发送方可以通过这个事件了解接收方的实时进度
         console.log('收到接收方进度反馈:', 
           fileId.substring(0, 8), 
           fileName,
           `${progress.toFixed(1)}%`,
-          `(${formatBytes(receivedBytes || 0)}/${formatBytes(totalBytes || 0)})`);
+          `(${formatBytes(receivedBytes || 0)}/${formatBytes(totalBytes || 0)})`,
+          `速度: ${formatSpeed(speed || 0)}`);
           
-        // 更新远程接收进度状态
+        // 更新远程接收进度状态，保存接收方速度
         setRemoteReceiveProgress(prev => ({
           ...prev,
           [fileId]: {
             progress: progress || 0,
             receivedBytes: receivedBytes || 0,
             totalBytes: totalBytes || 0,
+            speed: speed || 0, // 保存接收方的速度
             lastUpdate: Date.now()
           }
         }));
@@ -767,15 +769,18 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     return 'normal';
   }
 
-  // 修改渲染文件进度信息函数，更积极地显示时间
+  // 修改渲染文件进度信息函数，使用接收方的速度而非发送速度
   const renderProgressInfo = (id, progress, status) => {
-    const speed = transferSpeeds[id] || 0;
+    const local_speed = transferSpeeds[id] || 0;
     const remaining = remainingTimes[id];
     const isCompleted = progress >= 100;
     
     // 获取远程接收进度
     const remoteProgress = remoteReceiveProgress[id];
     const hasRemoteProgress = remoteProgress && typeof remoteProgress.progress === 'number';
+    
+    // 关键修改: 使用接收方的速度替代发送速度
+    const speed = hasRemoteProgress ? (remoteProgress.speed || local_speed) : local_speed;
     
     // 根据所有可用信息确定最佳时间显示
     let timeDisplay;
@@ -806,8 +811,8 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
               <span className="truncate">{formatSpeed(speed)}</span>
             </div>
             
-            <div className="w-1/5 text-center font-medium">
-              <span title="发送进度">↑{Math.round(progress || 0)}%</span>
+            <div className="w-1/3 text-center font-medium">
+              <span title="发送进度">{Math.round(progress || 0)}%</span>
             </div>
             
             <div className="w-1/3 flex items-center justify-end">
@@ -827,16 +832,16 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             />
             
             <div className="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-1">
-              <div className="w-1/5 flex items-center">
+              <div className="w-1/3 flex items-center">
                 <FiDownload className="mr-1 flex-shrink-0" />
-                <span title="对方接收进度">接收</span>
+                <span title="对方接收进度">对方接收进度</span>
               </div>
               
-              <div className="w-2/5 text-center font-medium">
-                <span title="对方接收进度">↓{Math.round(remoteProgress.progress || 0)}%</span>
+              <div className="w-1/3 text-center font-medium">
+                <span title="对方接收进度">{Math.round(remoteProgress.progress || 0)}%</span>
               </div>
               
-              <div className="w-2/5 text-right truncate">
+              <div className="w-1/3 text-right truncate">
                 {remoteProgress.receivedBytes && remoteProgress.totalBytes && 
                   renderByteProgress(remoteProgress.receivedBytes, remoteProgress.totalBytes)
                 }
@@ -848,7 +853,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     );
   };
 
-  // 修改渲染接收文件的进度条部分，确保始终显示进度，即使是很小的值
+  // 修改接收文件的进度条渲染，调整顺序和修复居中问题
   const renderReceiveProgress = (file, progress) => {
     // 从历史中获取最近的传输信息
     const fileHistory = lastProgressUpdateRef.current[file.id]?.progressHistory || [];
@@ -869,36 +874,8 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     
     return (
       <div className="mt-1">
-        {/* 远程发送进度条 - 只在有远程进度时显示 */}
-        {hasRemoteSend && (
-          <div className="mb-1 opacity-80">
-            <ProgressBar 
-              progress={remoteSend.progress || 0} 
-              status="muted" 
-              className="opacity-70"
-            />
-            
-            <div className="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-1">
-              <div className="w-1/5 flex items-center">
-                <FiUpload className="mr-1 flex-shrink-0" />
-                <span title="对方发送进度">发送</span>
-              </div>
-              
-              <div className="w-2/5 text-center font-medium">
-                <span title="对方发送进度">↑{Math.round(remoteSend.progress || 0)}%</span>
-              </div>
-              
-              <div className="w-2/5 text-right truncate">
-                {remoteSend.sentBytes && remoteSend.totalBytes && 
-                  renderByteProgress(remoteSend.sentBytes, remoteSend.totalBytes)
-                }
-              </div>
-            </div>
-          </div>
-        )}
-        
-        {/* 本地接收进度条 */}
-        <div>
+        {/* 本地接收进度条 - 调整到上方 */}
+        <div className="mb-1">
           <ProgressBar 
             progress={safeProgress} 
             status={getReceiveProgressStatus(file.id)} 
@@ -911,7 +888,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             </div>
             
             <div className="w-1/3 text-center font-medium">
-              <span title="接收进度">↓{progress < 0.1 ? '<0.1%' : `${Math.round(safeProgress)}%`}</span>
+              <span title="接收进度">{progress < 0.1 ? '<0.1%' : `${Math.round(safeProgress)}%`}</span>
               <span className="text-xs opacity-75 ml-1">
                 {sentBytes > 0 && totalBytes > 0 && `(${renderByteProgress(sentBytes, totalBytes)})`}
               </span>
@@ -931,6 +908,34 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             </div>
           </div>
         </div>
+        
+        {/* 远程发送进度条 - 只在有远程进度时显示，放到下方 */}
+        {hasRemoteSend && (
+          <div className="mt-1 opacity-80">
+            <ProgressBar 
+              progress={remoteSend.progress || 0} 
+              status="muted" 
+              className="opacity-70"
+            />
+            
+            <div className="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-1">
+              <div className="w-1/3 flex items-center">
+                <FiUpload className="mr-1 flex-shrink-0" />
+                <span title="对方发送进度">对方发送进度</span>
+              </div>
+              
+              <div className="w-1/3 text-center font-medium">
+                <span title="对方发送进度">{Math.round(remoteSend.progress || 0)}%</span>
+              </div>
+              
+              <div className="w-1/3 text-right truncate">
+                {remoteSend.sentBytes && remoteSend.totalBytes && 
+                  renderByteProgress(remoteSend.sentBytes, remoteSend.totalBytes)
+                }
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -1125,7 +1130,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                       />
                       
                       <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        <div className="w-1/3 flex items-center">
+                        <div className="w-1/3 flex items中心">
                           <FiTrendingUp className="mr-1 flex-shrink-0" />
                           <span className="truncate">{formatSpeed(transferSpeeds[file.id] || 0)}</span>
                         </div>
@@ -1134,7 +1139,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                           {Math.round(downloadProgress[file.id] || 0)}%
                         </div>
                         
-                        <div className="w-1/3 flex items-center justify-end">
+                        <div className="w-1/3 flex items中心 justify-end">
                           <FiClock className="mr-1 flex-shrink-0" />
                           <span className="truncate">
                             {formatTime(
