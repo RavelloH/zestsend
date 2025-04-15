@@ -633,7 +633,21 @@ export default function Room() {
       case 'file-start':
         addLog(`对方开始发送文件: ${data.fileName}`);
         
-        // 新增：分发自定义进度事件到全局，初始进度为0
+        // 新增：立即创建一个接收中的文件对象并添加到接收文件列表
+        setReceivedFiles(prev => [
+          ...prev,
+          {
+            id: data.fileId,
+            name: data.fileName,
+            size: data.fileSize || 0,
+            type: data.fileType || 'application/octet-stream',
+            status: 'receiving',
+            // 此时还没有数据，data属性为null
+            data: null
+          }
+        ]);
+
+        // 分发自定义进度事件到全局，初始进度为0
         window.dispatchEvent(new CustomEvent('file-progress', { 
           detail: {
             fileId: data.fileId,
@@ -641,7 +655,8 @@ export default function Room() {
             progress: 0,
             speed: 0,
             remainingTime: Infinity,
-            isReceiving: true
+            isReceiving: true,
+            status: 'receiving'
           }
         }));
         break;
@@ -667,20 +682,40 @@ export default function Room() {
         if (data.fileData && (data.fileData instanceof Blob) && data.fileData.size > 0) {
           addLog(`文件接收完成: ${data.fileName} (${formatBytes(data.fileSize)})`, 'success');
           
-          // 添加到收到的文件列表
-          setReceivedFiles(prev => [
-            ...prev, 
-            {
-              id: data.fileId || `file-${Date.now()}`,
-              name: data.fileName,
+          // 修改：更新已存在文件的数据，而不是添加新文件
+          setReceivedFiles(prev => prev.map(file => 
+            file.id === data.fileId ? {
+              ...file,
+              data: data.fileData,
               size: data.fileSize,
               type: data.fileType,
-              data: data.fileData
+              status: 'completed'
+            } : file
+          ));
+          
+          // 更新进度为100%并设置状态为完成
+          window.dispatchEvent(new CustomEvent('file-progress', { 
+            detail: {
+              fileId: data.fileId,
+              fileName: data.fileName,
+              progress: 100,
+              speed: 0,
+              remainingTime: 0,
+              isReceiving: true,
+              status: 'completed'
             }
-          ]);
+          }));
         } else {
           addLog(`文件接收失败: ${data.fileName} - 无效的文件数据`, 'error');
           console.error('文件数据无效:', data);
+          
+          // 更新文件状态为失败
+          setReceivedFiles(prev => prev.map(file => 
+            file.id === data.fileId ? {
+              ...file,
+              status: 'failed'
+            } : file
+          ));
         }
         break;
         

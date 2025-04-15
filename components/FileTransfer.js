@@ -20,18 +20,35 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
   // 新增: 记录上次进度更新时间和大小的引用
   const lastProgressUpdateRef = useRef({});
 
-  // 修改: 时间格式化函数，增加对传输完成的处理
+  // 修改: 时间格式化函数，增加对传输完成的处理和错误值处理
   const formatTime = (seconds, isCompleted = false) => {
-    if (isCompleted) return `总用时 ${formatTimeDuration(seconds)}`;
-    if (seconds === Infinity || seconds < 0 || !seconds) return '计算中...';
+    // 确保seconds是有效的数值
+    if (isCompleted && typeof seconds === 'number' && !isNaN(seconds) && isFinite(seconds)) {
+      return `总用时 ${formatTimeDuration(seconds)}`;
+    }
+    if (!seconds || seconds === Infinity || isNaN(seconds) || seconds < 0) return '计算中...';
     return formatTimeDuration(seconds);
   };
   
-  // 新增: 格式化时间的辅助函数
+  // 修改: 格式化时间的辅助函数，增加错误处理
   const formatTimeDuration = (seconds) => {
+    if (typeof seconds !== 'number' || isNaN(seconds) || !isFinite(seconds)) {
+      return '计算中...';
+    }
+    
+    // 确保秒数为正数
+    seconds = Math.max(0, seconds);
+    
     if (seconds < 60) return `${Math.floor(seconds)}秒`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}分${Math.floor(seconds % 60)}秒`;
-    return `${Math.floor(seconds / 3600)}小时${Math.floor((seconds % 3600) / 60)}分`;
+    if (seconds < 3600) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return `${mins}分${secs}秒`;
+    }
+    
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}小时${mins}分`;
   };
 
   // 修改: 速度格式化函数，确保返回固定长度的字符串
@@ -46,12 +63,12 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     const handleFileProgress = (event) => {
       if (event.detail && event.detail.fileId) {
         // 提取事件中的所有数据
-        const { fileId, fileName, progress, speed, remainingTime, isReceiving, sentBytes, totalBytes } = event.detail;
+        const { fileId, fileName, progress, speed, remainingTime, isReceiving, sentBytes, totalBytes, status } = event.detail;
         
         console.log('接收到文件进度更新:', event.detail);
         
         // 记录传输开始时间，用于计算总时间
-        if (!lastProgressUpdateRef.current[fileId] && progress > 0) {
+        if (!lastProgressUpdateRef.current[fileId]) {
           lastProgressUpdateRef.current[fileId] = { 
             time: Date.now(),
             size: 0,
@@ -67,7 +84,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             [fileId]: progress || 0
           }));
           
-          // 更新接收文件的速度和时间
+          // 更新接收文件的速度
           if (typeof speed === 'number' && speed > 0) {
             setTransferSpeeds(prev => ({
               ...prev,
@@ -75,15 +92,23 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             }));
           }
           
-          if (typeof remainingTime === 'number') {
-            setRemainingTimes(prev => ({
+          // 更新剩余时间，注意处理完成状态
+          // 如果已完成，计算总用时；否则使用剩余时间
+          const calculatedTime = progress >= 99.9 
+            ? (Date.now() - (lastProgressUpdateRef.current[fileId]?.startTime || Date.now())) / 1000
+            : remainingTime;
+            
+          setRemainingTimes(prev => {
+            // 确保不设置无效值，这可能导致显示问题
+            const newTime = (typeof calculatedTime === 'number' && !isNaN(calculatedTime)) 
+              ? calculatedTime 
+              : prev[fileId] || Infinity;
+              
+            return {
               ...prev,
-              [fileId]: progress >= 99.9 ? 
-                // 如果完成，计算总用时
-                (Date.now() - (lastProgressUpdateRef.current[fileId]?.startTime || Date.now())) / 1000 
-                : remainingTime
-            }));
-          }
+              [fileId]: newTime
+            };
+          });
         } else {
           // 发送方逻辑 - 发送进度更新
           setFileProgress(prev => ({
@@ -99,81 +124,20 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
             }));
           }
           
-          // 如果事件中包含剩余时间，直接使用它
-          if (typeof remainingTime === 'number') {
-            setRemainingTimes(prev => ({
-              ...prev,
-              [fileId]: progress >= 99.9 ? 
-                // 如果完成，计算总用时
-                (Date.now() - (lastProgressUpdateRef.current[fileId]?.startTime || Date.now())) / 1000 
-                : remainingTime
-            }));
-          }
-          
-          // 如果没有直接提供速度和剩余时间，则尝试计算
-          if ((!speed || speed <= 0) && progress > 0) {
-            const fileObj = selectedFiles.find(f => f.id === fileId);
-            if (fileObj && fileObj.file) {
-              const totalSize = fileObj.file.size;
-              const currentSize = (progress / 100) * totalSize;
-              const now = Date.now();
-              
-              // 获取上次更新信息
-              const lastUpdate = lastProgressUpdateRef.current[fileId] || { time: now, size: 0 };
-              
-              // 计算时间差(秒)和大小差(字节)
-              const timeDiff = (now - lastUpdate.time) / 1000;
-              const sizeDiff = currentSize - lastUpdate.size;
-              
-              // 确保有足够的时间差来计算有意义的速度
-              if (timeDiff > 0.5 && sizeDiff > 0) {
-                // 计算速度(字节/秒)
-                const calculatedSpeed = sizeDiff / timeDiff;
-                
-                // 计算剩余时间(秒)
-                const calculatedRemaining = (totalSize - currentSize) / (calculatedSpeed > 0 ? calculatedSpeed : 1);
-                
-                // 更新速度和剩余时间状态
-                setTransferSpeeds(prev => ({
-                  ...prev,
-                  [fileId]: calculatedSpeed
-                }));
-                
-                setRemainingTimes(prev => ({
-                  ...prev,
-                  [fileId]: calculatedRemaining
-                }));
-                
-                // 保存本次更新信息，供下次计算使用
-                lastProgressUpdateRef.current[fileId] = {
-                  time: now,
-                  size: currentSize
-                };
-              }
+          // 如果事件中包含剩余时间，直接使用它，并确保进行有效性检查
+          let timeToUse = remainingTime;
+          if (progress >= 99.9) {
+            const startTime = lastProgressUpdateRef.current[fileId]?.startTime;
+            if (startTime) {
+              timeToUse = (Date.now() - startTime) / 1000;
             }
           }
-        }
-        
-        // 如果是接收文件的进度更新 (新增)
-        if (event.detail.isReceiving) {
-          // 更新接收文件的进度
-          setDownloadProgress(prev => ({
-            ...prev,
-            [event.detail.fileId]: progress || 0
-          }));
           
-          // 更新接收文件的速度和时间
-          if (typeof speed === 'number' && speed > 0) {
-            setTransferSpeeds(prev => ({
-              ...prev,
-              [event.detail.fileId]: speed
-            }));
-          }
-          
-          if (typeof remainingTime === 'number') {
+          // 确保时间值有效
+          if (typeof timeToUse === 'number' && !isNaN(timeToUse)) {
             setRemainingTimes(prev => ({
               ...prev,
-              [event.detail.fileId]: remainingTime
+              [fileId]: timeToUse
             }));
           }
         }
@@ -330,13 +294,13 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     });
   };
 
-  // 修改下载文件函数，移除模拟进度条
+  // 修改下载文件函数，添加边缘情况检查
   const downloadFile = (file) => {
     console.log('准备下载文件:', file);
     
     if (!file.data) {
       console.error('无法下载：文件数据为空');
-      alert('文件下载失败：文件数据为空或已损坏');
+      alert('文件下载失败：文件数据为空或还在传输中');
       return;
     }
 
@@ -579,7 +543,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         </div>
       )}
 
-      {/* 接收的文件列表 - 修复CSS类名并确保暗色模式适配 */}
+      {/* 接收的文件列表 - 修改以显示传输中的文件 */}
       {receivedFiles.length > 0 && (
         <div className="mt-4">
           <h3 className="text-lg font-medium mb-2 flex items-center justify-between">
@@ -601,7 +565,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                 >
                   <div className="flex items-center mb-2">
                     <div className="text-2xl mr-3">
-                      <FiFile className="text-green-500" />
+                      <FiFile className={file.data ? "text-green-500" : "text-indigo-500"} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{file.name}</p>
@@ -609,7 +573,12 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                         {formatBytes(file.size || 0)}
                         {file.data && 
                          <span className="ml-2 text-green-500">
-                           (数据已就绪: {formatBytes(file.data.size || 0)})
+                           (数据已就绪)
+                         </span>
+                        }
+                        {!file.data &&
+                         <span className="ml-2 text-indigo-500">
+                           (接收中...)
                          </span>
                         }
                       </p>
@@ -625,19 +594,23 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                     </button>
                   </div>
                   
-                  {/* 修改: 下载进度条样式 - 确保任何进度值都显示 */}
-                  {(downloadProgress[file.id] > 0 || downloadProgress[file.id] === 0) && downloadProgress[file.id] !== undefined && (
+                  {/* 修改: 确保即使没有进度值也显示进度条(对接收中的文件) */}
+                  {(file.id && (downloadProgress[file.id] !== undefined || file.status === 'receiving')) && (
                     <div className="mt-1">
-                      <ProgressBar progress={downloadProgress[file.id]} status="success" />
+                      <ProgressBar 
+                        progress={downloadProgress[file.id] || 0} 
+                        status={!file.data ? "normal" : "success"} 
+                      />
                       
-                      {/* 修改: 使用固定宽度布局和正确的暗色模式类 */}
                       <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
                         <div className="w-1/3 flex items-center">
                           <FiTrendingUp className="mr-1 flex-shrink-0" />
-                          <span className="truncate">{formatSpeed(transferSpeeds[file.id])}</span>
+                          <span className="truncate">{formatSpeed(transferSpeeds[file.id] || 0)}</span>
                         </div>
                         
-                        <div className="w-1/5 text-center font-medium">{Math.round(downloadProgress[file.id])}%</div>
+                        <div className="w-1/5 text-center font-medium">
+                          {Math.round(downloadProgress[file.id] || 0)}%
+                        </div>
                         
                         <div className="w-1/3 flex items-center justify-end">
                           <FiClock className="mr-1 flex-shrink-0" />
