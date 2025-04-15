@@ -721,28 +721,69 @@ export default function Room() {
         
       case 'file-transfer-progress':
         // 添加对文件传输进度的处理 - 从发送方同步来的进度信息
-        if (data.progress > 0) {
-          // 分发接收进度事件
+        if (data.progress >= 0) { // 改为>=0，确保0%进度也能显示
+          // 限制日志输出，减少刷屏
+          if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
+            addLog(`文件接收进度 ${data.fileName}: ${Math.floor(data.progress)}% (${formatBytes(data.sentBytes || 0)}/${formatBytes(data.totalBytes || 0)})`);
+          }
+          
+          // 确保接收方的文件对象存在于状态中，如果不存在则创建
+          const fileExists = receivedFiles.some(f => f.id === data.fileId);
+          if (!fileExists) {
+            setReceivedFiles(prev => [
+              ...prev,
+              {
+                id: data.fileId,
+                name: data.fileName,
+                size: data.totalBytes || 0,
+                type: 'application/octet-stream',
+                status: 'receiving',
+                data: null
+              }
+            ]);
+          }
+          
+          // 分发接收进度事件，转发所有收到的细节
           window.dispatchEvent(new CustomEvent('file-progress', { 
             detail: {
-              fileId: data.fileId,
-              fileName: data.fileName,
-              progress: data.progress,
-              speed: data.speed,
-              remainingTime: data.remainingTime,
+              ...data,
               isReceiving: true,
-              sentBytes: data.sentBytes,
-              totalBytes: data.totalBytes
+              status: data.completed || data.progress >= 99.9 ? 'completed' : 'receiving'
             }
           }));
           
-          // 每25%记录一次关键进度点
-          // if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
-          //   addLog(`文件接收进度 ${data.fileName}: ${Math.floor(data.progress)}%`);
-          // }
+          // 如果是完成消息，立即更新文件状态防止文件显示滞后
+          if (data.completed || data.progress >= 99.9) {
+            setReceivedFiles(prev => prev.map(file => 
+              file.id === data.fileId ? {
+                ...file,
+                status: 'receiving',
+                size: data.totalBytes || file.size
+              } : file
+            ));
+          }
         }
         break;
-      
+        
+      // 新增：处理来自接收方的进度反馈，提供双向进度更新
+      case 'file-receive-progress':
+        if (data.progress >= 0) {
+          // 收到接收方的进度通知 - 这是从接收方发回来的进度数据
+          // 可以用来更新UI，显示接收方的接收进度
+          if (Math.floor(data.progress) % 25 === 0 || data.progress >= 99.9) {
+            addLog(`对方接收进度 ${data.fileName}: ${Math.floor(data.progress)}% (${formatBytes(data.receivedBytes || 0)}/${formatBytes(data.totalBytes || 0)})`);
+          }
+          
+          // 分发事件，这样UI组件就能知道对方接收的进度
+          window.dispatchEvent(new CustomEvent('file-receive-progress', { 
+            detail: {
+              ...data,
+              isReceiving: false  // 这是接收方的接收进度，不是自己的接收进度
+            }
+          }));
+        }
+        break;
+
       default:
         if (data.type && data.type !== 'ping' && data.type !== 'pong') {
           console.log('Received data:', data);

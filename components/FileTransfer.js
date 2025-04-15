@@ -13,6 +13,9 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
   // 新增: 添加传输速度和剩余时间的状态
   const [transferSpeeds, setTransferSpeeds] = useState({});
   const [remainingTimes, setRemainingTimes] = useState({});
+  // 新增: 添加远端进度状态
+  const [remoteSendProgress, setRemoteSendProgress] = useState({});
+  const [remoteReceiveProgress, setRemoteReceiveProgress] = useState({});
   
   const fileInputRef = useRef(null);
   const sendQueueRef = useRef([]);
@@ -356,16 +359,66 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     // 监听进度事件
     window.addEventListener('file-progress', handleFileProgress);
     
+    // 新增：监听接收方发回的进度反馈
+    const handleReceiveProgress = (event) => {
+      if (event.detail && event.detail.fileId) {
+        const { fileId, fileName, progress, receivedBytes, totalBytes } = event.detail;
+        
+        // 发送方可以通过这个事件了解接收方的实时进度
+        console.log('收到接收方进度反馈:', 
+          fileId.substring(0, 8), 
+          fileName,
+          `${progress.toFixed(1)}%`,
+          `(${formatBytes(receivedBytes || 0)}/${formatBytes(totalBytes || 0)})`);
+          
+        // 更新远程接收进度状态
+        setRemoteReceiveProgress(prev => ({
+          ...prev,
+          [fileId]: {
+            progress: progress || 0,
+            receivedBytes: receivedBytes || 0,
+            totalBytes: totalBytes || 0,
+            lastUpdate: Date.now()
+          }
+        }));
+      }
+    };
+    
+    // 新增：监听发送方发来的进度信息
+    const handleSendProgress = (event) => {
+      if (event.detail && event.detail.fileId && event.detail.isReceiving) {
+        const { fileId, fileName, progress, sentBytes, totalBytes } = event.detail;
+        
+        // 接收方可以通过这个事件了解发送方的实时进度
+        setRemoteSendProgress(prev => ({
+          ...prev,
+          [fileId]: {
+            progress: progress || 0,
+            sentBytes: sentBytes || 0,
+            totalBytes: totalBytes || 0,
+            lastUpdate: Date.now()
+          }
+        }));
+      }
+    };
+    
+    // 监听接收进度反馈事件
+    window.addEventListener('file-receive-progress', handleReceiveProgress);
+    // 监听发送进度事件
+    window.addEventListener('file-progress', handleSendProgress);
+    
     // 清理函数
     return () => {
       window.removeEventListener('file-progress', handleFileProgress);
+      window.removeEventListener('file-receive-progress', handleReceiveProgress);
+      window.removeEventListener('file-progress', handleSendProgress);
       
       // 清理所有防抖定时器
       Object.values(updateDebounceTimersRef.current).forEach(timer => {
         if (timer) clearTimeout(timer);
       });
     };
-  }, [selectedFiles, receivedFiles, remainingTimes, transferSpeeds]); // 注意依赖项列表添加了transferSpeeds
+  }, [selectedFiles, receivedFiles, remainingTimes, transferSpeeds]);
 
   // 显示收到的文件状态更多信息
   useEffect(() => {
@@ -665,6 +718,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       switch (status) {
         case 'error': return 'bg-red-500';
         case 'success': return 'bg-green-500'; 
+        case 'muted': return 'bg-gray-400 dark:bg-gray-600'; // 添加较暗的颜色用于远程进度条
         default: return 'bg-indigo-500';
       }
     };
@@ -700,11 +754,28 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     }
   };
 
+  // 新增：渲染字节进度的辅助函数
+  const renderByteProgress = (current, total) => {
+    return `${formatBytes(current)}/${formatBytes(total)}`;
+  };
+  
+  // 新增：获取接收进度状态的辅助函数
+  const getReceiveProgressStatus = (fileId) => {
+    const file = receivedFiles.find(f => f.id === fileId);
+    if (!file) return 'normal';
+    if (file.data) return 'success';
+    return 'normal';
+  }
+
   // 修改渲染文件进度信息函数，更积极地显示时间
   const renderProgressInfo = (id, progress, status) => {
     const speed = transferSpeeds[id] || 0;
     const remaining = remainingTimes[id];
     const isCompleted = progress >= 100;
+    
+    // 获取远程接收进度
+    const remoteProgress = remoteReceiveProgress[id];
+    const hasRemoteProgress = remoteProgress && typeof remoteProgress.progress === 'number';
     
     // 根据所有可用信息确定最佳时间显示
     let timeDisplay;
@@ -722,22 +793,142 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     
     return (
       <div className="mt-1">
-        <ProgressBar 
-          progress={progress || 0} 
-          status={status === 'failed' ? 'error' : (status === 'sent' ? 'success' : 'normal')}
-        />
-        
-        <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-          <div className="w-1/3 flex items-center">
-            <FiTrendingUp className="mr-1 flex-shrink-0" />
-            <span className="truncate">{formatSpeed(speed)}</span>
+        {/* 本地发送进度条 */}
+        <div className="mb-1">
+          <ProgressBar 
+            progress={progress || 0} 
+            status={status === 'failed' ? 'error' : (status === 'sent' ? 'success' : 'normal')}
+          />
+          
+          <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <div className="w-1/3 flex items-center">
+              <FiTrendingUp className="mr-1 flex-shrink-0" />
+              <span className="truncate">{formatSpeed(speed)}</span>
+            </div>
+            
+            <div className="w-1/5 text-center font-medium">
+              <span title="发送进度">↑{Math.round(progress || 0)}%</span>
+            </div>
+            
+            <div className="w-1/3 flex items-center justify-end">
+              <FiClock className="mr-1 flex-shrink-0" />
+              <span className="truncate">{timeDisplay}</span>
+            </div>
           </div>
+        </div>
+        
+        {/* 远程接收进度条 - 只在有远程进度时显示 */}
+        {hasRemoteProgress && (
+          <div className="mt-1 opacity-80">
+            <ProgressBar 
+              progress={remoteProgress.progress || 0} 
+              status="muted" 
+              className="opacity-70"
+            />
+            
+            <div className="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-1">
+              <div className="w-1/5 flex items-center">
+                <FiDownload className="mr-1 flex-shrink-0" />
+                <span title="对方接收进度">接收</span>
+              </div>
+              
+              <div className="w-2/5 text-center font-medium">
+                <span title="对方接收进度">↓{Math.round(remoteProgress.progress || 0)}%</span>
+              </div>
+              
+              <div className="w-2/5 text-right truncate">
+                {remoteProgress.receivedBytes && remoteProgress.totalBytes && 
+                  renderByteProgress(remoteProgress.receivedBytes, remoteProgress.totalBytes)
+                }
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // 修改渲染接收文件的进度条部分，确保始终显示进度，即使是很小的值
+  const renderReceiveProgress = (file, progress) => {
+    // 从历史中获取最近的传输信息
+    const fileHistory = lastProgressUpdateRef.current[file.id]?.progressHistory || [];
+    const latestRecord = fileHistory.length > 0 ? fileHistory[fileHistory.length - 1] : null;
+    
+    // 获取速度和字节进度，使用默认值防止undefined
+    const speed = transferSpeeds[file.id] || 0;
+    const sentBytes = latestRecord?.sentBytes || 0;
+    const totalBytes = latestRecord?.totalBytes || file.size || 0;
+    
+    // 获取远程发送进度
+    const remoteSend = remoteSendProgress[file.id];
+    const hasRemoteSend = remoteSend && typeof remoteSend.progress === 'number';
+    
+    // 确保进度是有效的数字值，并且始终显示任何大于0的值
+    const safeProgress = typeof progress === 'number' && !isNaN(progress) ? 
+      Math.max(0.1, progress) : 0.1; // 确保即使是0.1%也会显示
+    
+    return (
+      <div className="mt-1">
+        {/* 远程发送进度条 - 只在有远程进度时显示 */}
+        {hasRemoteSend && (
+          <div className="mb-1 opacity-80">
+            <ProgressBar 
+              progress={remoteSend.progress || 0} 
+              status="muted" 
+              className="opacity-70"
+            />
+            
+            <div className="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-1">
+              <div className="w-1/5 flex items-center">
+                <FiUpload className="mr-1 flex-shrink-0" />
+                <span title="对方发送进度">发送</span>
+              </div>
+              
+              <div className="w-2/5 text-center font-medium">
+                <span title="对方发送进度">↑{Math.round(remoteSend.progress || 0)}%</span>
+              </div>
+              
+              <div className="w-2/5 text-right truncate">
+                {remoteSend.sentBytes && remoteSend.totalBytes && 
+                  renderByteProgress(remoteSend.sentBytes, remoteSend.totalBytes)
+                }
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* 本地接收进度条 */}
+        <div>
+          <ProgressBar 
+            progress={safeProgress} 
+            status={getReceiveProgressStatus(file.id)} 
+          />
           
-          <div className="w-1/5 text-center font-medium">{Math.round(progress || 0)}%</div>
-          
-          <div className="w-1/3 flex items-center justify-end">
-            <FiClock className="mr-1 flex-shrink-0" />
-            <span className="truncate">{timeDisplay}</span>
+          <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <div className="w-1/3 flex items-center">
+              <FiTrendingUp className="mr-1 flex-shrink-0" />
+              <span className="truncate">{formatSpeed(speed)}</span>
+            </div>
+            
+            <div className="w-1/3 text-center font-medium">
+              <span title="接收进度">↓{progress < 0.1 ? '<0.1%' : `${Math.round(safeProgress)}%`}</span>
+              <span className="text-xs opacity-75 ml-1">
+                {sentBytes > 0 && totalBytes > 0 && `(${renderByteProgress(sentBytes, totalBytes)})`}
+              </span>
+            </div>
+            
+            <div className="w-1/3 flex items-center justify-end">
+              <FiClock className="mr-1 flex-shrink-0" />
+              <span className="truncate">
+                {formatTime(
+                  typeof remainingTimes[file.id] === 'number' ? remainingTimes[file.id] : null,
+                  safeProgress >= 100,
+                  safeProgress,
+                  file.id,
+                  'receive'
+                )}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -877,7 +1068,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       {/* 接收的文件列表 - 修改以显示传输中的文件 */}
       {receivedFiles.length > 0 && (
         <div className="mt-4">
-          <h3 className="text-lg font-medium mb-2 flex items-center justify-between">
+          <h3 className="text-lg font-medium mb-2 flex items中心 justify-between">
             <span>已接收文件</span>
             <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-300 px-2 py-1 rounded-full">
               {receivedFiles.length} 个文件
