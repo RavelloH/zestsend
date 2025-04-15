@@ -392,15 +392,27 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         const { fileId, fileName, progress, sentBytes, totalBytes } = event.detail;
         
         // 接收方可以通过这个事件了解发送方的实时进度
-        setRemoteSendProgress(prev => ({
-          ...prev,
-          [fileId]: {
-            progress: progress || 0,
-            sentBytes: sentBytes || 0,
-            totalBytes: totalBytes || 0,
-            lastUpdate: Date.now()
-          }
-        }));
+        setRemoteSendProgress(prev => {
+          // 获取当前文件的之前状态
+          const prevFileProgress = prev[fileId] || {};
+          
+          // 确保保留有效的字节信息（避免发送完成时变为0）
+          const validSentBytes = (sentBytes > 0) ? sentBytes : prevFileProgress.sentBytes || 0;
+          const validTotalBytes = (totalBytes > 0) ? totalBytes : prevFileProgress.totalBytes || 0;
+          
+          // 如果进度接近或等于100%，确保sentBytes等于totalBytes
+          const finalSentBytes = progress >= 99.9 && validTotalBytes > 0 ? validTotalBytes : validSentBytes;
+          
+          return {
+            ...prev,
+            [fileId]: {
+              progress: progress || 0,
+              sentBytes: finalSentBytes,
+              totalBytes: validTotalBytes,
+              lastUpdate: Date.now()
+            }
+          };
+        });
       }
     };
     
@@ -875,7 +887,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     return (
       <div className="mt-1">
         {/* 本地接收进度条 - 调整到上方 */}
-        <div className="mb-1">
+        <div class="mb-1">
           <ProgressBar 
             progress={safeProgress} 
             status={getReceiveProgressStatus(file.id)} 
@@ -1073,7 +1085,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       {/* 接收的文件列表 - 修改以显示传输中的文件 */}
       {receivedFiles.length > 0 && (
         <div className="mt-4">
-          <h3 className="text-lg font-medium mb-2 flex items中心 justify-between">
+          <h3 className="text-lg font-medium mb-2 flex items-center justify-between">
             <span>已接收文件</span>
             <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-300 px-2 py-1 rounded-full">
               {receivedFiles.length} 个文件
@@ -1121,36 +1133,10 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
                     </button>
                   </div>
                   
-                  {/* 修改: 确保即使没有进度值也显示进度条(对接收中的文件) */}
-                  {(file.id && (downloadProgress[file.id] !== undefined || file.status === 'receiving')) && (
-                    <div className="mt-1">
-                      <ProgressBar 
-                        progress={downloadProgress[file.id] || 0} 
-                        status={!file.data ? "normal" : "success"} 
-                      />
-                      
-                      <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        <div className="w-1/3 flex items中心">
-                          <FiTrendingUp className="mr-1 flex-shrink-0" />
-                          <span className="truncate">{formatSpeed(transferSpeeds[file.id] || 0)}</span>
-                        </div>
-                        
-                        <div className="w-1/5 text-center font-medium">
-                          {Math.round(downloadProgress[file.id] || 0)}%
-                        </div>
-                        
-                        <div className="w-1/3 flex items中心 justify-end">
-                          <FiClock className="mr-1 flex-shrink-0" />
-                          <span className="truncate">
-                            {formatTime(
-                              typeof remainingTimes[file.id] === 'number' ? remainingTimes[file.id] : null,
-                              downloadProgress[file.id] >= 100
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* 修改: 调用renderReceiveProgress函数显示双进度条 */}
+                  {(file.id && (downloadProgress[file.id] !== undefined || file.status === 'receiving')) && 
+                    renderReceiveProgress(file, downloadProgress[file.id] || 0)
+                  }
                 </motion.div>
               ))}
             </AnimatePresence>
