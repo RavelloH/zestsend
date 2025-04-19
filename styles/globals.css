@@ -28,6 +28,7 @@ body {
   color: rgb(var(--text-primary));
   background: rgb(var(--background-start-rgb));
   min-height: 100vh;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
 .card {
@@ -183,4 +184,12 @@ div, section {
 
 .dark-theme .map-container {
   background-color: #2d3748;
+}
+
+/* 修复iOS中的固定/粘性定位元素 */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
 }

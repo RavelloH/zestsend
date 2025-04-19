@@ -50,8 +50,15 @@ export default function Layout({ children }) {
           />
         )}
 
-        <header className="sticky top-0 backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700"
-        style={{ zIndex: 3000 }}>
+        {/* 修改header以覆盖iOS状态栏区域 */}
+        <header 
+          className="sticky top-0 backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700"
+          style={{ 
+            zIndex: 3000,
+            paddingTop: 'env(safe-area-inset-top, 0px)', // 使用iOS安全区域变量
+          }}
+        >
+          {/* 添加一个容器来保持原有布局，同时考虑安全区域 */}
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
             <motion.div 
               initial={{ opacity: 0, x: -20 }}
