@@ -32,12 +32,14 @@ export default function Layout({ children }) {
         </Head>
 
         {/* 添加Script组件加载Umami分析代码，使用策略防止重复加载 */}
-        <Script
-          id="umami-analytics" // 给脚本一个唯一ID，防止重复注入
-          strategy="afterInteractive" // 页面可交互后再加载此脚本
-          src="https://analytics.ravelloh.top/script.js"
-          data-website-id="3bf45934-11bf-43d1-81c6-c5e418b7e6f8"
-        />
+        {/* 在dev模式下不执行 */}
+        {process.env.NODE_ENV !== 'development' && (
+          <Script
+            src="https://analytics.ravelloh.top/script.js"
+            data-website-id="3bf45934-11bf-43d1-81c6-c5e418b7e6f8"
+            strategy="afterInteractive"
+          />
+        )}
 
         <header className="sticky top-0 backdrop-blur-md bg-white/90 dark:bg-gray-800/90 shadow-sm border-b border-gray-200 dark:border-gray-700"
         style={{ zIndex: 3000 }}>
