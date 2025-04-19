@@ -28,6 +28,15 @@ export default function Layout({ children }) {
           <title>ZestSend - P2P文件传输</title>
           <meta name="description" content="安全、私密的P2P文件传输" />
           <link rel="icon" href="/favicon.ico" />
+          
+          {/* PWA 支持 */}
+          <meta name="theme-color" content={theme === 'dark' ? '#111827' : '#4F46E5'} />
+          <meta name="apple-mobile-web-app-capable" content="yes" />
+          <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+          <meta name="apple-mobile-web-app-title" content="ZestSend" />
+          <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+          <link rel="manifest" href="/manifest.json" />
+          
           {/* 移除Umami分析跟踪代码，改为使用Script组件 */}
         </Head>
 
