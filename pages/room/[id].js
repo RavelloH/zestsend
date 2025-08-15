@@ -866,7 +866,7 @@ export default function Room() {
       return false;
     }
     
-    addLog(`开始发送文件: ${file.name} (块大小: ${formatBytes(chunkSize || 128 * 1024)})`);
+    addLog(`开始发送文件: ${file.name} (块大小: ${formatBytes(chunkSize || 1024 * 1024)})`);  // 更新日志显示
     
     try {
       // 将文件ID和块大小传递给WebRTC连接

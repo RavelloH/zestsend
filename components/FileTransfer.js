@@ -232,6 +232,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
         if (chunkSize && !isNaN(chunkSize) && chunkSize > 0) {
           setChunkSizes(prev => {
             if (prev[fileId] !== chunkSize) {
+              console.log(`更新文件${fileId}的块大小: ${formatChunkSize(prev[fileId] || 64*1024)} -> ${formatChunkSize(chunkSize)}`);
               return {
                 ...prev,
                 [fileId]: chunkSize
@@ -441,12 +442,12 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     
     // 新增：监听块大小变更事件
     const handleChunkSizeChange = (event) => {
-      if (event.type === 'chunk-size-change' && event.fileId && event.chunkSize) {
-        console.log(`收到块大小变更通知: 文件${event.fileId}的块大小调整为${formatChunkSize(event.chunkSize)}`);
+      if (event.detail && event.detail.fileId && event.detail.chunkSize) {
+        console.log(`收到块大小变更通知: 文件${event.detail.fileId.substring(0, 8)}的块大小调整为${formatChunkSize(event.detail.chunkSize)}`);
         
         setChunkSizes(prev => ({
           ...prev,
-          [event.fileId]: event.chunkSize
+          [event.detail.fileId]: event.detail.chunkSize
         }));
       }
     };
@@ -586,7 +587,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
       );
       
       // 获取当前块大小 - 可能已经被动态调整过
-      const currentChunkSize = chunkSizes[fileId] || 128 * 1024; // 默认128KB
+      const currentChunkSize = chunkSizes[fileId] || 64 * 1024; // 默认64KB
       
       // 启动文件发送并传递ID和块大小
       const result = await onSendFile(fileObj.file, fileId, currentChunkSize);
@@ -653,7 +654,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     if (!chunkSizes[fileObj.id]) {
       setChunkSizes(prev => ({
         ...prev,
-        [fileObj.id]: 128 * 1024 // 默认128KB
+        [fileObj.id]: 64 * 1024 // 从64KB开始，动态调整
       }));
     }
     
@@ -852,7 +853,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     }
     
     // 获取当前块大小
-    const currentChunkSize = chunkSizes[fileId] || 128 * 1024; // 默认128KB
+    const currentChunkSize = chunkSizes[fileId] || 64 * 1024; // 默认64KB
     
     // 避免过于频繁调整
     const now = Date.now();
@@ -869,11 +870,11 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     
     if (Math.abs(progressDiff) <= 5) {
       // 如果进度差异小于5%，增大块大小
-      newChunkSize = Math.min(currentChunkSize * 2, 8 * 1024 * 1024); // 最大8MB
+      newChunkSize = Math.min(currentChunkSize * 1.5, 4 * 1024 * 1024); // 最大4MB，更保守的增长
       console.log(`文件${fileId}接收进度良好，增大块大小至${formatChunkSize(newChunkSize)}`);
     } else if (progressDiff > 15) {
       // 如果接收方进度落后超过15%，减小块大小
-      newChunkSize = Math.max(currentChunkSize / 2, 64 * 1024); // 最小64KB
+      newChunkSize = Math.max(currentChunkSize / 2, 16 * 1024); // 最小16KB
       console.log(`文件${fileId}接收进度滞后，减小块大小至${formatChunkSize(newChunkSize)}`);
     }
     
@@ -922,7 +923,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     const speed = hasRemoteProgress ? (remoteProgress.speed || local_speed) : local_speed;
     
     // 获取当前块大小
-    const chunkSize = chunkSizes[id] || 128 * 1024; // 默认128KB
+    const chunkSize = chunkSizes[id] || 64 * 1024; // 默认64KB
     
     // 根据所有可用信息确定最佳时间显示
     let timeDisplay;
@@ -1011,7 +1012,7 @@ export default function FileTransfer({ onSendFile, receivedFiles = [] }) {
     const hasRemoteSend = remoteSend && typeof remoteSend.progress === 'number';
     
     // 获取当前块大小
-    const chunkSize = chunkSizes[file.id] || 128 * 1024; // 默认128KB
+    const chunkSize = chunkSizes[file.id] || 64 * 1024; // 默认64KB
     
     // 确保进度是有效的数字值，并且始终显示任何大于0的值
     const safeProgress = typeof progress === 'number' && !isNaN(progress) ? 
