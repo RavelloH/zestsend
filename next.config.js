@@ -11,9 +11,6 @@ const nextConfig = {
   swcMinify: true,
   images: {
     domains: ['api.mapbox.com', 'tile.openstreetmap.org'],
-  },
-  env: {
-    MAPBOX_ACCESS_TOKEN: process.env.MAPBOX_ACCESS_TOKEN,
   }
 }
 
